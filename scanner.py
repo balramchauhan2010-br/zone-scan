@@ -60,8 +60,12 @@ def scan_universe(tf: str, frames: Dict[str, pd.DataFrame], params: dict,
             risk = abs(z.proxVal - z.slVal)
             reward = abs(z.tpVal - z.proxVal)
             rr = reward / risk if risk else np.nan
+            clean_sym = symbol.replace(".NS", "")
             rows.append({
-                "Symbol": tradingview_url(symbol.replace(".NS", "")),
+                # Interval is embedded in the link itself, so opening the
+                # chart from ANY row lands on the SAME timeframe as the zone.
+                "Symbol": tradingview_url(clean_sym, tf=tf),
+                "Timeframe": tf,
                 "Ticker": symbol,
                 "Direction": "DEMAND (Buy Zone)" if z.isDemand else "SUPPLY (Sell Zone)",
                 "Pattern": z.patternType,
@@ -84,16 +88,15 @@ def scan_universe(tf: str, frames: Dict[str, pd.DataFrame], params: dict,
                 "Touch Count": z.touchCount,
                 "Zone Created": z.timestamp,
                 "Last Bar Time": last_bar_time,
-                "Timeframe": tf,
             })
+    cols = [
+        "Symbol", "Timeframe", "Ticker", "Direction", "Pattern", "State", "Entry (Proximal)",
+        "Stop Loss (Distal+Buffer)", "Target (RR set)", "Risk:Reward", "Current Price",
+        "Distance from Entry", "Distance %", "Price Position", "HQ Zone (Rule3 Boring-Colour)",
+        "White Area OK (Rule4)", "Base Count", "Touch Count", "Zone Created", "Last Bar Time",
+    ]
     if not rows:
-        return pd.DataFrame(columns=[
-            "Symbol", "Ticker", "Direction", "Pattern", "State", "Entry (Proximal)",
-            "Stop Loss (Distal+Buffer)", "Target (RR set)", "Risk:Reward", "Current Price",
-            "Distance from Entry", "Distance %", "Price Position", "HQ Zone (Rule3 Boring-Colour)",
-            "White Area OK (Rule4)", "Base Count", "Touch Count", "Zone Created", "Last Bar Time",
-            "Timeframe",
-        ])
-    out = pd.DataFrame(rows)
+        return pd.DataFrame(columns=cols)
+    out = pd.DataFrame(rows)[cols]
     out = out.sort_values("Distance %", key=lambda s: s.abs())
     return out.reset_index(drop=True)

@@ -40,16 +40,27 @@ rules/trading-logic**, both are pure engineering/robustness fixes:
 With these fixes, a full default scan (all 9 timeframes, Top-50 universe)
 completes in **under 20 seconds** end-to-end in testing.
 
+**Note:** `zone_core.py` has NOT been touched again since the original perf
+fix - every change above and in the "UI cleanup" round is either a network/
+robustness fix (`data_fetch.py`) or a pure display/layout change (`app.py`).
+The rules, conditions, and trading logic are byte-for-byte the same file.
+
 ## Features
 
-- **Clean, collapsible sidebar**: Timeframes and Universe-size are the only
-  always-visible controls; EOD Range Filter, Rule Toggles/Target RR, and
-  Cache/Force-Rescan are tucked into small collapsed expanders so the
-  sidebar stays compact.
+- **No permanent sidebar** - all Scanner Settings live behind a small **⚙️
+  gear icon in the top-left corner** (a `st.popover`). Opening it reveals
+  Timeframes, Universe size, Filters, and the 3 expanders below; closing it
+  gives the results table the FULL page width. Nothing is lost, it's just
+  tucked away until needed.
 - **Timeframes multiselect** - all 10 selected by default (short labels:
   15m/30m/75m/1H/2H/4H/6H/Daily/Weekly/Monthly); deselect any you don't need
-  for a faster scan. Results render as tabs (or directly if only one is
-  picked).
+  for a faster scan.
+- **Every selected timeframe is scanned AND shown together in ONE combined
+  table** (Symbol still links to the right TradingView chart, a new
+  "Timeframe" column - right after Symbol - tells you which timeframe each
+  row came from). A "View Timeframe(s)" filter above the table lets you
+  narrow the *display* to specific timeframes instantly, without
+  re-scanning anything.
 - **Market-Cap universe slider**: a single clean "Top N by Market Cap"
   control (Top 25/50/75/100/150/200/All) instead of tier checkboxes/chips -
   smaller N = faster scan. Backed by a bundled rank snapshot
@@ -58,18 +69,19 @@ completes in **under 20 seconds** end-to-end in testing.
 - **EOD-Range filter** (day-candle-close High +X% / Low -X%) is a single
   combined slider by default (applies the same % to both High and Low) -
   toggle "Advanced" inside the expander if you want them independent.
-- **TradingView chart links** built directly into the Symbol column.
-- CSV export of the table shown.
+- **TradingView chart links with the correct timeframe pre-selected**: the
+  Symbol column's link now embeds the row's own timeframe as a TradingView
+  `interval` param, so the chart opens directly on the SAME timeframe as
+  the scanned zone (15m row -> chart opens on 15m, Daily row -> opens on
+  Daily, etc.) instead of TradingView's default/last-used interval.
 - **Refresh only on candle close.** Every timeframe's scan result is cached
   against a session-aware "candle bucket" (NSE holidays included) - so a
   Daily/Weekly/Monthly scan is *not* re-run on every page reload, only when
   that timeframe's own candle actually closes. This keeps load low on
   bigger timeframes as requested. A "Force Rescan Now" button is available
   to bypass the cache deliberately.
-- **TradingView chart links** are built directly into the Symbol column.
-- Sidebar toggles for all 4 extra rules, target R:R (>= 1:3 enforced),
-  zone state (Fresh/Tested), direction (Demand/Supply), and an HQ-only
-  filter.
+- Toggles for all 4 extra rules, target R:R (>= 1:3 enforced), zone state
+  (Fresh/Tested), direction (Demand/Supply), and an HQ-only filter.
 - CSV export of the table shown.
 
 ## Project layout

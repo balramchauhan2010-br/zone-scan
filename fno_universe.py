@@ -62,9 +62,29 @@ def to_yahoo_tickers(symbols: List[str]) -> List[str]:
     return [s + ".NS" for s in symbols]
 
 
-def tradingview_url(symbol: str) -> str:
+# Maps our internal timeframe labels to TradingView's `interval` query-param
+# values, so the chart link opens directly on the SAME timeframe as the
+# scanned zone (instead of always opening on TradingView's default/last-used
+# interval). 75m/6H aren't native TradingView presets but the numeric-minute
+# form still works for most logged-in TradingView sessions; harmless if not.
+TF_TO_TV_INTERVAL = {
+    "15m": "15", "30m": "30", "75m": "75",
+    "1H": "60", "2H": "120", "4H": "240", "6H": "360",
+    "Daily": "D", "Weekly": "W", "Monthly": "M",
+}
+
+
+def tradingview_url(symbol: str, tf: str = None) -> str:
     tv_symbol = symbol.replace("&", "_").replace("-", "_")
-    return f"https://www.tradingview.com/chart/?symbol=NSE%3A{tv_symbol}"
+    url = f"https://www.tradingview.com/chart/?symbol=NSE%3A{tv_symbol}"
+    interval = TF_TO_TV_INTERVAL.get(tf)
+    if interval:
+        url += f"&interval={interval}"
+    if tf:
+        # Harmless extra param (TradingView ignores unknown ones) - lets the
+        # UI extract a clean display label for the "Timeframe" link column.
+        url += f"&tf={tf}"
+    return url
 
 
 if __name__ == "__main__":
