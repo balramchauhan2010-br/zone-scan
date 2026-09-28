@@ -83,6 +83,25 @@ The rules, conditions, and trading logic are byte-for-byte the same file.
 - Toggles for all 4 extra rules, target R:R (>= 1:3 enforced), zone state
   (Fresh/Tested), direction (Demand/Supply), and an HQ-only filter.
 - CSV export of the table shown.
+- **Custom timeframes**: beyond the 10 presets, type any `<number>m` or
+  `<number>H` value into the Timeframes box (e.g. `5m`, `3m`, `45m`, `3H`)
+  and press Enter to add/remove it. Built the exact same session-aware way
+  as the existing 30m/75m/2H/4H/6H presets (grouping native 1m/5m/15m/60m
+  Yahoo bars per trading day) - `zone_core.py` is never touched.
+- **🌍 Top Global Instruments (optional universe add-on)**: add any of 15
+  major global benchmarks - DXY, USD/INR, TLT, US 10Y Yield, Gold, Silver,
+  WTI Crude, Dow/S&P500, Shanghai Composite, FTSE China A50, Nikkei 225,
+  Nifty/GIFT-Nifty futures (proxy), FTSE 100, DAX - on top of the normal
+  NSE stock universe. Same unchanged zone_core.py engine runs on them; thin
+  Yahoo data for some asset classes is skipped gracefully like any stock
+  with too few bars.
+- **Live Market Watch ticker-tape** at the top of the page: 6 small
+  clickable badges (GIFT NIFTY, NIFTY 50, BANK NIFTY, USD/INR, XAUUSD,
+  SPOTCRUDE) with live price + %-change, refreshed every 3 minutes -
+  replaces the old Universe/Market/Timeframes metrics row.
+- **Small "tag" style summary** (Total Zones / Demand / Supply / HQ) instead
+  of large metric numbers, plus a **📍 NIFTY50 nearest-zone badge** showing
+  the single Daily-timeframe zone closest to the current Nifty 50 price.
 
 ## Project layout
 
@@ -95,8 +114,9 @@ fno_stocks_fallback.json - bundled snapshot used when the live NSE call is block
 market_cap.py            - market-cap tier lookup (reads market_cap_tiers.json)
 market_cap_tiers.json    - bundled rank-based market-cap tiers (offline, instant)
 build_market_cap_tiers.py- offline script to refresh market_cap_tiers.json
+global_instruments.py    - optional Top-Global-Instruments universe add-on + Market Watch ticker-tape list
 data_fetch.py            - chunked yfinance downloads (with request timeouts)
-scanner.py               - builds timeframe frames + runs zone_core + tidy table
+scanner.py               - builds timeframe frames (incl. custom TFs) + runs zone_core + tidy table
 app.py                   - the Streamlit UI
 requirements.txt
 ```
@@ -121,7 +141,8 @@ NSE's website frequently blocks requests coming from datacenter IPs
 (AWS/GCP/etc., which is exactly what Streamlit Cloud runs on). The app tries
 a live fetch first and **automatically falls back** to the bundled
 `fno_stocks_fallback.json` snapshot if that fails - you'll see which source
-was used in the "Universe" metric at the top of the app.
+was used in the small caption under "Universe (Market-Cap size)" inside the
+⚙️ Settings popover.
 
 To refresh the bundled snapshot (recommended every 1-2 months, since NSE
 adds/removes F&O stocks periodically), run this from a normal (non-cloud)

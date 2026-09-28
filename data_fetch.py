@@ -95,6 +95,24 @@ def fetch_15m(tickers: List[str], lookback_days: int = 59, progress_cb=None) -> 
                           label="15m", progress_cb=progress_cb)
 
 
+def fetch_5m(tickers: List[str], lookback_days: int = 59, progress_cb=None) -> Dict[str, pd.DataFrame]:
+    """Native 5-minute bars - Yahoo's hard limit is ~60 days, same as 15m."""
+    end = pd.Timestamp.now().normalize() + pd.Timedelta(days=1)
+    start = end - pd.Timedelta(days=lookback_days)
+    return download_many(tickers, "5m", start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"),
+                          label="5m", progress_cb=progress_cb)
+
+
+def fetch_1m(tickers: List[str], lookback_days: int = 6, progress_cb=None) -> Dict[str, pd.DataFrame]:
+    """Native 1-minute bars - Yahoo's hard limit is ~7 days, so only used
+    when a user explicitly types a custom timeframe that needs 1m granularity
+    (e.g. '3m'). Short lookback is a Yahoo limitation, not a bug."""
+    end = pd.Timestamp.now().normalize() + pd.Timedelta(days=1)
+    start = end - pd.Timedelta(days=lookback_days)
+    return download_many(tickers, "1m", start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"),
+                          label="1m", progress_cb=progress_cb)
+
+
 def fetch_60m(tickers: List[str], lookback_days: int = 350, progress_cb=None) -> Dict[str, pd.DataFrame]:
     end = pd.Timestamp.now().normalize() + pd.Timedelta(days=1)
     start = end - pd.Timedelta(days=lookback_days)
@@ -107,3 +125,24 @@ def fetch_daily(tickers: List[str], lookback_days: int = 1100, progress_cb=None)
     start = end - pd.Timedelta(days=lookback_days)
     return download_many(tickers, "1d", start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"),
                           label="Daily", progress_cb=progress_cb)
+
+
+def fetch_market_watch_quotes(yahoo_tickers: List[str]) -> Dict[str, tuple]:
+    """Lightweight live-price + %-change fetch for the top ticker-tape
+    (last 2 daily closes -> works uniformly across stocks/indices/forex/
+    commodities without needing per-asset-class special casing)."""
+    uniq = list(dict.fromkeys(yahoo_tickers))
+    data = download_many(uniq, "1d", None, None, period="5d", label="watch")
+    out = {}
+    for t, df in data.items():
+        if df is None or df.empty or len(df) < 2:
+            continue
+        try:
+            last = float(df["close"].iloc[-1])
+            prev = float(df["close"].iloc[-2])
+            chg = (last - prev) / prev * 100.0 if prev else 0.0
+            out[t] = (last, chg)
+        except Exception:
+            continue
+    return out
+

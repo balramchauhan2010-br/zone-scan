@@ -8,9 +8,11 @@ snapshot (fno_stocks_fallback.json) - update it periodically by running
 connection) and committing the refreshed file to the repo.
 """
 import json
+import re
 import time
 from pathlib import Path
 from typing import List, Tuple
+from urllib.parse import quote
 
 import requests
 
@@ -74,10 +76,28 @@ TF_TO_TV_INTERVAL = {
 }
 
 
+_CUSTOM_TF_RE = re.compile(r"^(\d+)(m|H)$")
+
+
+def _tv_interval_for(tf: str) -> str:
+    """Works for both preset timeframes AND any custom user-typed one
+    (e.g. '5m', '45m', '3H') so the chart link always opens on the exact
+    same timeframe as the scanned zone."""
+    if not tf:
+        return None
+    if tf in TF_TO_TV_INTERVAL:
+        return TF_TO_TV_INTERVAL[tf]
+    m = _CUSTOM_TF_RE.match(tf.strip())
+    if not m:
+        return None
+    n, unit = int(m.group(1)), m.group(2)
+    return str(n if unit == "m" else n * 60)
+
+
 def tradingview_url(symbol: str, tf: str = None) -> str:
     tv_symbol = symbol.replace("&", "_").replace("-", "_")
     url = f"https://www.tradingview.com/chart/?symbol=NSE%3A{tv_symbol}"
-    interval = TF_TO_TV_INTERVAL.get(tf)
+    interval = _tv_interval_for(tf)
     if interval:
         url += f"&interval={interval}"
     if tf:
@@ -85,6 +105,32 @@ def tradingview_url(symbol: str, tf: str = None) -> str:
         # UI extract a clean display label for the "Timeframe" link column.
         url += f"&tf={tf}"
     return url
+
+
+def chart_url(ticker: str, tf: str = None) -> str:
+    """Generalised chart-link builder: NSE F&O stocks get the usual
+    NSE:<SYMBOL> link; any 'Global Instrument' ticker (added via the
+    optional universe add-on) gets its own correct TradingView
+    exchange:symbol instead (e.g. TVC:DXY, FX_IDC:USDINR, TVC:GOLD)."""
+    try:
+        import global_instruments as _gi
+        meta = _gi.YAHOO_TO_META.get(ticker)
+    except Exception:
+        meta = None
+    if meta:
+        # keep '!' un-escaped (used by continuous-futures symbols like
+        # NIFTY1!) so the LinkColumn's display-text regex shows it cleanly
+        url = f"https://www.tradingview.com/chart/?symbol={quote(meta['tv'], safe='!')}"
+    else:
+        clean = ticker.replace(".NS", "").replace("&", "_").replace("-", "_")
+        url = f"https://www.tradingview.com/chart/?symbol=NSE%3A{clean}"
+    interval = _tv_interval_for(tf)
+    if interval:
+        url += f"&interval={interval}"
+    if tf:
+        url += f"&tf={quote(str(tf), safe='')}"
+    return url
+
 
 
 if __name__ == "__main__":

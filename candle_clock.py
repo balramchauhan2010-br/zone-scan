@@ -12,7 +12,8 @@ update NSE_HOLIDAYS for future years as needed.
 """
 from __future__ import annotations
 import datetime as dt
-from typing import Tuple
+import re
+from typing import Optional, Tuple
 
 import pandas as pd
 
@@ -52,6 +53,57 @@ TF_GRID = {
 }
 INTRADAY_TFS = set(TF_GRID.keys())
 DAILY_LIKE_TFS = {"Daily", "Weekly", "Monthly"}
+
+# NSE cash session length in minutes (09:15 -> 15:30).
+SESSION_MINUTES = 375
+
+# Canonical custom-timeframe format ONLY (e.g. "5m", "45m", "3H") - the app
+# normalises any free-typed user input (like "3 min" or "8hr") to this
+# canonical form before it ever reaches this module.
+CUSTOM_TF_RE = re.compile(r"^(\d+)(m|H)$")
+
+
+def parse_custom_tf(tf: str) -> Optional[dict]:
+    """For any timeframe NOT already in TF_GRID/DAILY_LIKE_TFS, work out
+    which NATIVE base granularity (1/5/15/60 minutes) it should be built
+    from and how many of those native bars to group together.
+
+    This lets a user type an arbitrary custom timeframe (e.g. '3m', '5m',
+    '45m', '3H', '8H') and have it built the exact same session-aware way
+    as the built-in 30m/75m/2H/4H/6H presets - zero changes to zone_core.py,
+    purely a data-plumbing generalisation of the existing resample logic.
+    """
+    if tf in TF_GRID or tf in DAILY_LIKE_TFS:
+        return None
+    m = CUSTOM_TF_RE.match(tf.strip())
+    if not m:
+        return None
+    n = int(m.group(1))
+    unit = m.group(2)
+    if n <= 0:
+        return None
+    if unit == "H":
+        base = 60
+        group = n
+    else:
+        if n % 15 == 0:
+            base = 15
+        elif n % 5 == 0:
+            base = 5
+        else:
+            base = 1
+        group = n // base
+    slots = SESSION_MINUTES // base
+    return {"base": base, "group": group, "slots": slots}
+
+
+def _grid_for(tf: str) -> Tuple[int, int, int]:
+    if tf in TF_GRID:
+        return TF_GRID[tf]
+    parsed = parse_custom_tf(tf)
+    if parsed:
+        return (parsed["base"], parsed["slots"], parsed["group"])
+    raise ValueError(f"Unknown/unsupported timeframe: {tf}")
 
 
 def now_ist() -> pd.Timestamp:
@@ -107,7 +159,7 @@ def last_closed_bucket(tf: str, now: pd.Timestamp = None) -> pd.Timestamp:
         d = today_or_prev_fully_closed(now)
         return pd.Timestamp(year=d.year, month=d.month, day=1)
 
-    base, slots, group = TF_GRID[tf]
+    base, slots, group = _grid_for(tf)
     today = now.date()
     closed_today = 0
     if is_trading_day(today):
@@ -147,7 +199,7 @@ def next_close_eta(tf: str, now: pd.Timestamp = None) -> str:
         return "Market band hai - agla open session shuru hone ka wait"
     if not status["open"]:
         return "Market band hai - agla candle NSE khulne ke baad banega"
-    base, slots, group = TF_GRID[tf]
+    base, slots, group = _grid_for(tf)
     o, _ = _open_close_dt(status["session_date"])
     elapsed_min = (now - o).total_seconds() / 60.0
     closed_today = min(slots, int(elapsed_min // base))
