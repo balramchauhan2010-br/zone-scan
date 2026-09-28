@@ -7,11 +7,28 @@ from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
 
 # -----------------------------------------------------------------------------
-# Configuration - Rules Conditions Logic Unchanged + New EOD Range Option
-# + New Rules: (1) Leg-in Closing-Side Small Wick  (2) Leg-out Coverage Guard
-#              (3) Boring-Colour High-Quality Zone Flag  (4) White-Area Check
+# Configuration
+#   PINE_DEFAULTS me scoring parameters (hqLegOutTrMult, hqLegInAtrMult,
+#   genuineGapBonus, overnightGapBonus, minValidScore, hqScoreThreshold,
+#   legOutBodyHeavyPct) wapas aa gaye hain - config me available hain, lekin
+#   scoring jaan-boojh kar DISABLED hai: densityScore = 0, score10 = 0.0.
+#   + New EOD Range Option
+#   + New Rules: (1) Leg-in Closing-Side Small Wick  (2) Leg-out Coverage Guard
+#                (3) Boring-Colour High-Quality Zone Flag  (4) White-Area Check
 # -----------------------------------------------------------------------------
-BASE_BORING_MAX_BODY_PCT = 0.55
+# CHANGES (is version me):
+#   (a) legInMinBodyPct: 0.55 -> 0.60 (Pine default par wapas)
+#   (b) legOutTrMult gate: legOutTR >= mult * ATR  (Pine ka '>=' wapas, '>' nahi)
+#   (c) Scoring parameters config me wapas (values set, scoring nahi hoti)
+#   (d) BASE_BORING_MAX_BODY_PCT ka GATING hata diya gaya. Uski value ab
+#       settings() se badalne layak "baseBoringMaxBodyPct" key hai, aur use
+#       sirf DISPLAY-ONLY Doji/Indecision highlight tag ke liye hota hai
+#       (core scan logic me koi filter nahi).
+#   (e) Leg-out "full-range engulf" REJECT rule REMOVED (Pine me ye rule hai nahi)
+#   (f) Volume rule strict: legOutVol > legInVol (Pine jaisa, missing-volume
+#       escape hataya gaya)
+#   Baaki koi logic/rule/state-machine/field nahi badla gaya.
+# -----------------------------------------------------------------------------
 
 PINE_DEFAULTS: Dict[str, Any] = {
     "accountCapital": 25000.0,
@@ -22,6 +39,15 @@ PINE_DEFAULTS: Dict[str, Any] = {
     "volSmaPeriod": 20,
     "legOutTrMult": 1.2,
     "legOutMinTrRatio": 1.0,
+    # --- Scoring parameters (present for parity; scoring DISABLED, value = 0) ---
+    "hqLegOutTrMult": 2.0,
+    "hqLegInAtrMult": 1.5,
+    "genuineGapBonus": 10,
+    "overnightGapBonus": 15,
+    "minValidScore": 40,
+    "hqScoreThreshold": 90,
+    "legOutBodyHeavyPct": 0.60,
+    # ------------------------------------------------------------------------
     "maxBaseAtrMult": 1.0,
     "maxWickPct": 0.30,
     "minBaseCountInput": 1,
@@ -30,7 +56,11 @@ PINE_DEFAULTS: Dict[str, Any] = {
     "minClvPct": 0.60,
     "legInToBaseSizeMult": 2.0,
     "legOutToLegInBodyMult": 1.0,
-    "legInMinBodyPct": 0.55,
+    "legInMinBodyPct": 0.60,
+    # baseBoringMaxBodyPct: pehle hard-coded BASE_BORING_MAX_BODY_PCT tha.
+    # Ab settings() se changeable hai - par sirf Doji/Indecision HIGHLIGHT
+    # tag ke liye (koi filter/condition nahi).
+    "baseBoringMaxBodyPct": 0.55,
     "useImbalance": True,
     "maxImbalanceMult": 1.0,
     "relaxGapCapOvernight": True,
@@ -96,10 +126,10 @@ class Box:
     bgcolor: object
     def set_right(self, right: int) -> None:
         self.right = right
-    def set_bgcolor(self, color: object) -> None:
-        self.bgcolor = color
-    def set_border_color(self, color: object) -> None:
-        self.border_color = color
+    def set_bgcolor(self, bgcolor: object) -> None:
+        self.bgcolor = bgcolor
+    def set_border_color(self, border_color: object) -> None:
+        self.border_color = border_color
 
 @dataclass
 class Zone:
@@ -141,6 +171,9 @@ class Zone:
     breakReason: str = ""                     # Why zone was marked Broken (e.g. Rule 2)
     entryBarIndex: Optional[int] = None       # Bar index of first Fresh->Tested entry trigger
     entryTimestamp: object = None             # Timestamp of that same bar (for backtest use)
+    # DISPLAY-ONLY tags (no filtering) - small-body / Doji / Indecision base candles
+    baseIndecision: bool = False              # kam-se-kam 1 base candle ka body small (indecision)
+    baseDojiCount: int = 0                    # kitni base candles exactly Doji (open == close)
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -312,8 +345,8 @@ def should_scan_now(tf: str, force: bool = False) -> bool:
         return False
 
 # -----------------------------------------------------------------------------
-# Zone engine - Rules Conditions Logic Unchanged + EOD Range + Candle Complete
-#              + New Rules 1-4
+# Zone engine - EOD Range + Candle Complete + New Rules 1-4
+#              + Scoring params (scoring disabled, value = 0)
 # -----------------------------------------------------------------------------
 class ZoneEngine:
     def __init__(self, df: pd.DataFrame, **kwargs: Any):
@@ -485,11 +518,12 @@ class ZoneEngine:
             bull_clv = (leg_in_close - leg_in_low) / leg_in_range
             bear_clv = (leg_in_high - leg_in_close) / leg_in_range
             all_base_valid = True
-            all_base_boring = True
             max_base_tr = 0.0
             max_base_body = 0.0
             max_base_high = -1.0
             min_base_low = 1_000_000_000.0
+            base_indecision_count = 0  # DISPLAY-ONLY (was: all_base_boring gate)
+            base_doji_count = 0        # DISPLAY-ONLY tag
             base_colors: List[str] = []  # NEW RULE 3 tracking
             for b in range(1, b_count + 1):
                 pos_b = i - b
@@ -500,11 +534,16 @@ class ZoneEngine:
                 if base_tr > self.maxBaseAtrMult * self.atr_val[pos_b]:
                     all_base_valid = False
                     break
-                base_body_pct = abs(self.close[pos_b] - self.open[pos_b]) / base_tr if base_tr > 0 else 0.0
-                if base_body_pct > BASE_BORING_MAX_BODY_PCT:
-                    all_base_boring = False
+                base_body_size = abs(self.close[pos_b] - self.open[pos_b])
+                # Small body = Doji / Indecision candle. Ab koi FILTER nahi -
+                # sirf highlight tag ke liye count hota hai.
+                base_body_pct = base_body_size / base_tr if base_tr > 0 else 0.0
+                if base_body_pct <= self.baseBoringMaxBodyPct:
+                    base_indecision_count += 1
+                if base_body_size == 0:
+                    base_doji_count += 1
                 max_base_tr = max(max_base_tr, base_tr)
-                max_base_body = max(max_base_body, abs(self.close[pos_b] - self.open[pos_b]))
+                max_base_body = max(max_base_body, base_body_size)
                 max_base_high = max(max_base_high, self.high[pos_b])
                 min_base_low = min(min_base_low, self.low[pos_b])
                 # NEW RULE 3: track this base candle's colour
@@ -532,17 +571,16 @@ class ZoneEngine:
             is_supply_leg_out = self._is_bear(i, leg_out_idx)
             if not (is_demand_leg_out or is_supply_leg_out):
                 continue
-            leg_out_fully_engulfs_base = leg_out_high >= max_base_high and leg_out_low <= min_base_low
-            if leg_out_fully_engulfs_base:
-                continue
-            is_leg_out_explosive = leg_out_tr > self.legOutTrMult * self.atr_val[pos_leg_out]
+            # NOTE: Pine jaisa sirf BODY-engulf (+ no genuine gap) reject -
+            # full-range (wick-inclusive) engulf reject rule REMOVED.
+            is_leg_out_explosive = leg_out_tr >= self.legOutTrMult * self.atr_val[pos_leg_out]
             is_leg_out_wick_valid = self._wick_pct(i, leg_out_idx) <= self.maxWickPct
             passes_tr_hierarchy = leg_out_tr >= self.legOutMinTrRatio * leg_in_tr and leg_in_tr > max_base_tr
             passes_strict_candle_hierarchy = max_base_tr < leg_in_tr < leg_out_tr
             passes_strict_body_hierarchy = max_base_body < leg_in_body_size and leg_out_body_size > self.legOutToLegInBodyMult * leg_in_body_size
             passes_leg_out_close_confirmation = leg_out_close > max_base_high if is_demand_leg_out else leg_out_close < min_base_low
-            leg_out_volume_missing = not np.isfinite(leg_out_vol) or leg_out_vol <= 0
-            passes_volume = leg_out_volume_missing or leg_out_vol > leg_in_vol
+            # Pine jaisa strict volume rule: legOutVol > legInVol
+            passes_volume = leg_out_vol > leg_in_vol
             is_overnight = self._is_overnight_gap(i)
             has_imbalance = True
             has_genuine_gap = False
@@ -564,7 +602,7 @@ class ZoneEngine:
             is_dbr = leg_in_is_bear and bear_clv >= self.minClvPct and is_demand_leg_out
             is_dbd = leg_in_is_bear and bear_clv >= self.minClvPct and is_supply_leg_out
             is_rbd = leg_in_is_bull and bull_clv >= self.minClvPct and is_supply_leg_out
-            if not ((is_rbr or is_dbr or is_dbd or is_rbd) and is_leg_out_explosive and is_leg_out_wick_valid and passes_tr_hierarchy and all_base_boring and passes_strict_candle_hierarchy and passes_strict_body_hierarchy and passes_leg_out_close_confirmation and passes_volume and has_imbalance):
+            if not ((is_rbr or is_dbr or is_dbd or is_rbd) and is_leg_out_explosive and is_leg_out_wick_valid and passes_tr_hierarchy and passes_strict_candle_hierarchy and passes_strict_body_hierarchy and passes_leg_out_close_confirmation and passes_volume and has_imbalance):
                 continue
             prox_val = max_base_high if is_demand_leg_out else min_base_low
             dist_val = min_base_low if is_demand_leg_out else max_base_high
@@ -611,7 +649,7 @@ class ZoneEngine:
                     zone_label = "Demand" if is_demand_leg_out else "Supply"
                     hq_reason = f"{colour_label} Boring Base in {zone_label} Zone (~{self.hqBaseColourProbabilityPct:g}% probability)"
 
-            new_zone = Zone(proxVal=prox_val, distVal=dist_val, slVal=sl_val, tpVal=tp_val, isDemand=is_demand_leg_out, densityScore=0, isHQ=base_colour_ok, patternType="RBR" if is_rbr else "DBR" if is_dbr else "DBD" if is_dbd else "RBD", zoneCategory="Continuation" if (is_rbr or is_dbd) else "Reversal", state="Fresh", touchCount=0, startBarIndex=i - b_count, createdBarIndex=i, baseCount=b_count, legOutHigh=leg_out_high, legOutLow=leg_out_low, legOutMidLevel=leg_out_mid_level, isOvernight=is_overnight, legInTR=leg_in_tr, legOutTR=leg_out_tr, zoneBox=Box(left=i - b_count - 1, top=prox_val, right=i + 15, bottom=dist_val, border_color=box_border_color, bgcolor=box_fill_color), timestamp=self.df.index[i], riskPct=risk_pct_of_price, score10=0.0, baseColourOK=base_colour_ok, legInVolX=leg_in_vol / self.vol_sma[pos_leg_in] if self.vol_sma[pos_leg_in] and not np.isnan(self.vol_sma[pos_leg_in]) else float("nan"), legOutVolX=leg_out_vol / self.vol_sma[pos_leg_out] if self.vol_sma[pos_leg_out] and not np.isnan(self.vol_sma[pos_leg_out]) else float("nan"), gapToLegIn=gap_size, hqProbabilityPct=hq_probability_pct, hqReason=hq_reason)
+            new_zone = Zone(proxVal=prox_val, distVal=dist_val, slVal=sl_val, tpVal=tp_val, isDemand=is_demand_leg_out, densityScore=0, isHQ=base_colour_ok, patternType="RBR" if is_rbr else "DBR" if is_dbr else "DBD" if is_dbd else "RBD", zoneCategory="Continuation" if (is_rbr or is_dbd) else "Reversal", state="Fresh", touchCount=0, startBarIndex=i - b_count, createdBarIndex=i, baseCount=b_count, legOutHigh=leg_out_high, legOutLow=leg_out_low, legOutMidLevel=leg_out_mid_level, isOvernight=is_overnight, legInTR=leg_in_tr, legOutTR=leg_out_tr, zoneBox=Box(left=i - b_count - 1, top=prox_val, right=i + 15, bottom=dist_val, border_color=box_border_color, bgcolor=box_fill_color), timestamp=self.df.index[i], riskPct=risk_pct_of_price, score10=0.0, baseColourOK=base_colour_ok, legInVolX=leg_in_vol / self.vol_sma[pos_leg_in] if self.vol_sma[pos_leg_in] and not np.isnan(self.vol_sma[pos_leg_in]) else float("nan"), legOutVolX=leg_out_vol / self.vol_sma[pos_leg_out] if self.vol_sma[pos_leg_out] and not np.isnan(self.vol_sma[pos_leg_out]) else float("nan"), gapToLegIn=gap_size, hqProbabilityPct=hq_probability_pct, hqReason=hq_reason, baseIndecision=base_indecision_count > 0, baseDojiCount=base_doji_count)
             self.active_zones.append(new_zone)
             self.live_zones.append(new_zone)
 
@@ -723,7 +761,7 @@ def settings(accountCapital: Optional[float] = None, **overrides: Any) -> Dict[s
     return result
 
 def scan_zones(df: pd.DataFrame, params: Optional[Dict[str, Any]] = None, accountCapital: Optional[float] = None, tf: Optional[str] = None) -> List[Zone]:
-    """Scan zones - Rules Unchanged + EOD Range Option + Candle Complete Check + Rules 1-4"""
+    """Scan zones - EOD Range Option + Candle Complete Check + Rules 1-4"""
     incoming = dict(params or {})
     if accountCapital is not None:
         incoming["accountCapital"] = accountCapital
