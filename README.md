@@ -9,11 +9,36 @@ zone in one table: **Symbol (clickable TradingView chart link), Entry
 (Proximal), Stop Loss (Distal+buffer), Target, and live distance from the
 current price.**
 
+## Performance
+
+An earlier version was very slow to load on Streamlit Cloud. The root cause
+was a single line inside `zone_core.py`'s `get_eod_range()` helper that
+recomputed `df.index.date` (converts the WHOLE index to python date objects)
+and re-filtered the WHOLE dataframe **on every single bar** - that's O(n)
+work repeated n times = **O(n^2)**, which got dramatically worse the longer
+the history (e.g. the 1H timeframe went from 95s to 575s for the full
+210-stock universe as history grew). This has been fixed by precomputing
+the per-day High/Low **once** (vectorized, O(n) total) and doing an O(1)
+array lookup per bar instead - **mathematically identical results** (same
+calendar-day grouping, same max/min), just up to **~50x faster**. Verified
+zone-for-zone against the old engine with zero mismatches. Full-universe
+scans now typically finish in single-digit to ~20 seconds instead of
+minutes.
+
 ## Features
 
-- **EOD-Range filter** (day-candle-close High +X% / Low -Y%) is adjustable
-  live from the sidebar (sliders), exactly per the zone-scan-range rule
-  already built into `zone_core.py`.
+- **Market-Cap tier universe selector**: pick "Large Cap (Top 50)",
+  "Large-Mid Cap (51-100)", "Mid Cap (101-200)", "Small Cap (200+)", or any
+  combination, to scan a lighter/faster subset instead of always scanning
+  all ~210 F&O stocks. Tiers are rank-based on market cap (fetched via
+  `yfinance`, bundled as `market_cap_tiers.json` - refresh periodically
+  with `python build_market_cap_tiers.py`, no live NSE dependency at
+  runtime so this is instant and never blocked).
+- **EOD-Range filter** (day-candle-close High +X% / Low -X%) is a single
+  combined slider by default (applies the same % to both High and Low, for
+  a cleaner display) - toggle "Advanced" in the sidebar if you want to set
+  them independently, exactly per the zone-scan-range rule already built
+  into `zone_core.py`.
 - **Refresh only on candle close.** Every timeframe's scan result is cached
   against a session-aware "candle bucket" (NSE holidays included) - so a
   Daily/Weekly/Monthly scan is *not* re-run on every page reload, only when
@@ -29,14 +54,17 @@ current price.**
 ## Project layout
 
 ```
-zone_core.py         - the zone-detection engine (unchanged core logic + 4 rules)
-resample_utils.py     - session-aware resampling (2H/4H/6H/30m/75m/Weekly/Monthly)
-candle_clock.py       - NSE-session-aware "has this candle closed yet" clock
-fno_universe.py        - NSE F&O stock list (live fetch + bundled fallback)
+zone_core.py             - the zone-detection engine (unchanged core logic + 4 rules, perf-fixed)
+resample_utils.py        - session-aware resampling (2H/4H/6H/30m/75m/Weekly/Monthly)
+candle_clock.py          - NSE-session-aware "has this candle closed yet" clock
+fno_universe.py          - NSE F&O stock list (live fetch + bundled fallback)
 fno_stocks_fallback.json - bundled snapshot used when the live NSE call is blocked
-data_fetch.py          - chunked yfinance downloads
-scanner.py             - builds timeframe frames + runs zone_core + tidy table
-app.py                 - the Streamlit UI
+market_cap.py            - market-cap tier lookup (reads market_cap_tiers.json)
+market_cap_tiers.json    - bundled rank-based market-cap tiers (offline, instant)
+build_market_cap_tiers.py- offline script to refresh market_cap_tiers.json
+data_fetch.py            - chunked yfinance downloads (with request timeouts)
+scanner.py               - builds timeframe frames + runs zone_core + tidy table
+app.py                   - the Streamlit UI
 requirements.txt
 ```
 

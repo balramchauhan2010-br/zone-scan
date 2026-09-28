@@ -365,6 +365,24 @@ class ZoneEngine:
         self.atr_val = self._rma(self.current_tr, self.atrPeriod)
         self.vol_sma = self.df["volume"].rolling(self.volSmaPeriod).mean().to_numpy()
 
+        # ------------------------------------------------------------
+        # PERFORMANCE FIX (behaviour unchanged): the original get_eod_range()
+        # recomputed df.index.date (slow, converts the WHOLE index to python
+        # date objects) and re-filtered the WHOLE dataframe on EVERY bar -
+        # that is O(n) work repeated n times = O(n^2), which is what made
+        # large-history scans (e.g. 1H over many months) extremely slow.
+        # Precomputing the per-day High/Low ONCE (vectorized, O(n) total)
+        # gives mathematically IDENTICAL results (same calendar-day grouping,
+        # same max(high)/min(low)) - just computed once instead of per-bar.
+        # ------------------------------------------------------------
+        if self.n > 0:
+            day_key = self.df.index.normalize()  # same calendar-day grouping as .date(), but vectorized/fast
+            self.day_high = self.df["high"].groupby(day_key).transform("max").to_numpy()
+            self.day_low = self.df["low"].groupby(day_key).transform("min").to_numpy()
+        else:
+            self.day_high = np.empty(0)
+            self.day_low = np.empty(0)
+
     def _tr(self, i: int, idx: int) -> float:
         pos = i - idx
         return float(self.current_tr[pos]) if 0 <= pos < self.n else float("nan")
@@ -414,9 +432,14 @@ class ZoneEngine:
     def _scan_bar(self, i: int) -> None:
         # NEW: EOD Range Check - Day Candle Close High+10% Low-10%
         # Changeable option: eodHighBufferPct, eodLowBufferPct
+        # (uses the precomputed self.day_high/self.day_low - see _prepare_indicators
+        #  perf-fix note; numerically identical to calling get_eod_range() per-bar)
         try:
-            eod_low, eod_high = get_eod_range(self.df, i, self.eodHighBufferPct, self.eodLowBufferPct)
-        except:
+            d_high = self.day_high[i]
+            d_low = self.day_low[i]
+            eod_high = d_high * (1 + self.eodHighBufferPct / 100.0)
+            eod_low = d_low * (1 - self.eodLowBufferPct / 100.0)
+        except Exception:
             eod_low, eod_high = -1e9, 1e9
 
         zone_found_on_this_bar = False

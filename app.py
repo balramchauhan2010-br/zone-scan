@@ -7,6 +7,7 @@ import zone_core as zc
 import data_fetch
 import scanner
 import candle_clock as cc
+import market_cap as mc
 from fno_universe import get_fno_symbols, to_yahoo_tickers
 
 st.set_page_config(page_title="NSE F&O Supply/Demand Zone Scanner", layout="wide", page_icon="📈")
@@ -20,16 +21,32 @@ tf_choice = st.sidebar.selectbox(
     "Timeframe", scanner.TF_LIST + ["🔎 Scan ALL timeframes (heavy)"], index=3,
 )
 
-universe_mode = st.sidebar.radio(
-    "Stock Universe", ["Full NSE F&O List (~210)", "Quick Test (first 40)"], index=0,
+st.sidebar.markdown("---")
+st.sidebar.subheader("Stock Universe (Market-Cap based)")
+st.sidebar.caption("Kam stocks scan karne ke liye chhote tier chunein - scan utna hi fast hoga.")
+_all_tiers_counts = mc.tier_counts(to_yahoo_tickers(get_fno_symbols(try_live=False)[0]))
+tier_labels = [f"{t} - {_all_tiers_counts.get(t, 0)} stocks" for t in mc.TIER_ORDER if _all_tiers_counts.get(t, 0) > 0]
+tier_label_to_key = {lbl: t for lbl, t in zip(tier_labels, [t for t in mc.TIER_ORDER if _all_tiers_counts.get(t, 0) > 0])}
+selected_tier_labels = st.sidebar.multiselect(
+    "Market Cap Tiers", tier_labels, default=tier_labels,
 )
+selected_tiers = [tier_label_to_key[l] for l in selected_tier_labels] or list(tier_label_to_key.values())
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("EOD Range Filter (Rule: Day-Close High+X% / Low-Y%)")
-eod_high_pct = st.sidebar.slider("High Buffer % (+)", 0.0, 50.0, 10.0, 0.5,
-                                  help="Din ke EOD High se kitna % upar tak zone valid maana jaaye")
-eod_low_pct = st.sidebar.slider("Low Buffer % (-)", 0.0, 50.0, 10.0, 0.5,
-                                 help="Din ke EOD Low se kitna % neeche tak zone valid maana jaaye")
+st.sidebar.subheader("EOD Range Filter (Day-Close +X% / -X%)")
+eod_advanced = st.sidebar.checkbox("Advanced: alag High/Low % set karein", value=False)
+if eod_advanced:
+    eod_high_pct = st.sidebar.slider("High Buffer % (+)", 0.0, 50.0, 10.0, 0.5,
+                                      help="Din ke EOD High se kitna % upar tak zone valid maana jaaye")
+    eod_low_pct = st.sidebar.slider("Low Buffer % (-)", 0.0, 50.0, 10.0, 0.5,
+                                     help="Din ke EOD Low se kitna % neeche tak zone valid maana jaaye")
+else:
+    eod_pct = st.sidebar.slider(
+        "EOD Range Buffer % (+High / -Low, dono ek saath)", 0.0, 50.0, 10.0, 0.5,
+        help="Zone sirf tab valid maani jaayegi jab woh Din ke EOD High+X% aur Low-X% ke range ke andar ho.",
+    )
+    eod_high_pct = eod_pct
+    eod_low_pct = eod_pct
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Target Risk:Reward")
@@ -65,9 +82,9 @@ def cached_universe():
     return get_fno_symbols(try_live=True)
 
 symbols, universe_source = cached_universe()
-if universe_mode.startswith("Quick"):
-    symbols = symbols[:40]
-tickers = tuple(to_yahoo_tickers(symbols))
+all_tickers = to_yahoo_tickers(symbols)
+tickers = tuple(mc.filter_tickers_by_tier(all_tickers, selected_tiers))
+
 
 # -----------------------------------------------------------------------------
 # Cached raw data fetchers - keyed to each dataset's OWN candle-close bucket
@@ -128,7 +145,7 @@ if force_rescan:
 st.title("📈 NSE F&O Supply/Demand Zone Scanner")
 status = cc.market_status()
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Universe", f"{len(symbols)} stocks", universe_source)
+col1.metric("Universe (selected tiers)", f"{len(tickers)} / {len(symbols)} stocks", universe_source)
 col2.metric("Market", "🟢 OPEN" if status["open"] else "🔴 CLOSED")
 if tf_choice != "🔎 Scan ALL timeframes (heavy)":
     col3.metric("Next candle close", cc.next_close_eta(tf_choice))

@@ -1,0 +1,1052 @@
+{
+  "RELIANCE.NS": {
+    "rank": 1,
+    "market_cap": 16329634067889.234,
+    "tier": "Large Cap (Top 50)"
+  },
+  "HDFCBANK.NS": {
+    "rank": 2,
+    "market_cap": 11105928803529.77,
+    "tier": "Large Cap (Top 50)"
+  },
+  "BHARTIARTL.NS": {
+    "rank": 3,
+    "market_cap": 11086719146536.412,
+    "tier": "Large Cap (Top 50)"
+  },
+  "ICICIBANK.NS": {
+    "rank": 4,
+    "market_cap": 9359211218546.098,
+    "tier": "Large Cap (Top 50)"
+  },
+  "SBIN.NS": {
+    "rank": 5,
+    "market_cap": 8913084115684.725,
+    "tier": "Large Cap (Top 50)"
+  },
+  "TCS.NS": {
+    "rank": 6,
+    "market_cap": 7439873539927.83,
+    "tier": "Large Cap (Top 50)"
+  },
+  "BAJFINANCE.NS": {
+    "rank": 7,
+    "market_cap": 6080942557205.0,
+    "tier": "Large Cap (Top 50)"
+  },
+  "LT.NS": {
+    "rank": 8,
+    "market_cap": 5239160334517.478,
+    "tier": "Large Cap (Top 50)"
+  },
+  "HINDUNILVR.NS": {
+    "rank": 9,
+    "market_cap": 4473386861084.868,
+    "tier": "Large Cap (Top 50)"
+  },
+  "SUNPHARMA.NS": {
+    "rank": 10,
+    "market_cap": 4424853434518.973,
+    "tier": "Large Cap (Top 50)"
+  },
+  "TITAN.NS": {
+    "rank": 11,
+    "market_cap": 4286162234217.5,
+    "tier": "Large Cap (Top 50)"
+  },
+  "ADANIPORTS.NS": {
+    "rank": 12,
+    "market_cap": 4036306000035.201,
+    "tier": "Large Cap (Top 50)"
+  },
+  "INFY.NS": {
+    "rank": 13,
+    "market_cap": 4015915638748.5,
+    "tier": "Large Cap (Top 50)"
+  },
+  "KOTAKBANK.NS": {
+    "rank": 14,
+    "market_cap": 3953287959160.1514,
+    "tier": "Large Cap (Top 50)"
+  },
+  "ADANIENT.NS": {
+    "rank": 15,
+    "market_cap": 3842406095640.5273,
+    "tier": "Large Cap (Top 50)"
+  },
+  "ADANIPOWER.NS": {
+    "rank": 16,
+    "market_cap": 3834375883506.4805,
+    "tier": "Large Cap (Top 50)"
+  },
+  "AXISBANK.NS": {
+    "rank": 17,
+    "market_cap": 3768046684040.8364,
+    "tier": "Large Cap (Top 50)"
+  },
+  "MARUTI.NS": {
+    "rank": 18,
+    "market_cap": 3758682772170.0,
+    "tier": "Large Cap (Top 50)"
+  },
+  "M&M.NS": {
+    "rank": 19,
+    "market_cap": 3590279169360.0,
+    "tier": "Large Cap (Top 50)"
+  },
+  "HCLTECH.NS": {
+    "rank": 20,
+    "market_cap": 3363268025502.0,
+    "tier": "Large Cap (Top 50)"
+  },
+  "ITC.NS": {
+    "rank": 21,
+    "market_cap": 3341262303168.4434,
+    "tier": "Large Cap (Top 50)"
+  },
+  "ULTRACEMCO.NS": {
+    "rank": 22,
+    "market_cap": 3237631002810.0,
+    "tier": "Large Cap (Top 50)"
+  },
+  "HAL.NS": {
+    "rank": 23,
+    "market_cap": 3172601657189.9414,
+    "tier": "Large Cap (Top 50)"
+  },
+  "NTPC.NS": {
+    "rank": 24,
+    "market_cap": 3127659543154.1934,
+    "tier": "Large Cap (Top 50)"
+  },
+  "JSWSTEEL.NS": {
+    "rank": 25,
+    "market_cap": 3093260140796.6045,
+    "tier": "Large Cap (Top 50)"
+  },
+  "ETERNAL.NS": {
+    "rank": 26,
+    "market_cap": 3048365867886.2896,
+    "tier": "Large Cap (Top 50)"
+  },
+  "BAJAJ-AUTO.NS": {
+    "rank": 27,
+    "market_cap": 3036582409900.0,
+    "tier": "Large Cap (Top 50)"
+  },
+  "ONGC.NS": {
+    "rank": 28,
+    "market_cap": 2918624775792.0,
+    "tier": "Large Cap (Top 50)"
+  },
+  "BEL.NS": {
+    "rank": 29,
+    "market_cap": 2810975359461.2515,
+    "tier": "Large Cap (Top 50)"
+  },
+  "BAJAJFINSV.NS": {
+    "rank": 30,
+    "market_cap": 2805709156232.7495,
+    "tier": "Large Cap (Top 50)"
+  },
+  "COALINDIA.NS": {
+    "rank": 31,
+    "market_cap": 2624089646407.983,
+    "tier": "Large Cap (Top 50)"
+  },
+  "NESTLEIND.NS": {
+    "rank": 32,
+    "market_cap": 2604767077611.9727,
+    "tier": "Large Cap (Top 50)"
+  },
+  "DIVISLAB.NS": {
+    "rank": 33,
+    "market_cap": 2546905556520.0,
+    "tier": "Large Cap (Top 50)"
+  },
+  "LICI.NS": {
+    "rank": 34,
+    "market_cap": 2536956616475.8223,
+    "tier": "Large Cap (Top 50)"
+  },
+  "DMART.NS": {
+    "rank": 35,
+    "market_cap": 2484861466728.952,
+    "tier": "Large Cap (Top 50)"
+  },
+  "POWERGRID.NS": {
+    "rank": 36,
+    "market_cap": 2468380196796.219,
+    "tier": "Large Cap (Top 50)"
+  },
+  "HINDZINC.NS": {
+    "rank": 37,
+    "market_cap": 2445192156878.601,
+    "tier": "Large Cap (Top 50)"
+  },
+  "TATASTEEL.NS": {
+    "rank": 38,
+    "market_cap": 2335191930235.4087,
+    "tier": "Large Cap (Top 50)"
+  },
+  "ASIANPAINT.NS": {
+    "rank": 39,
+    "market_cap": 2320973796242.107,
+    "tier": "Large Cap (Top 50)"
+  },
+  "SHRIRAMFIN.NS": {
+    "rank": 40,
+    "market_cap": 2291865863116.0,
+    "tier": "Large Cap (Top 50)"
+  },
+  "HINDALCO.NS": {
+    "rank": 41,
+    "market_cap": 2139034954165.5588,
+    "tier": "Large Cap (Top 50)"
+  },
+  "GRASIM.NS": {
+    "rank": 42,
+    "market_cap": 2133851065033.3208,
+    "tier": "Large Cap (Top 50)"
+  },
+  "ADANIGREEN.NS": {
+    "rank": 43,
+    "market_cap": 2063911722215.0,
+    "tier": "Large Cap (Top 50)"
+  },
+  "EICHERMOT.NS": {
+    "rank": 44,
+    "market_cap": 1984791934380.0,
+    "tier": "Large Cap (Top 50)"
+  },
+  "TVSMOTOR.NS": {
+    "rank": 45,
+    "market_cap": 1949282947635.9727,
+    "tier": "Large Cap (Top 50)"
+  },
+  "IOC.NS": {
+    "rank": 46,
+    "market_cap": 1887444773985.2996,
+    "tier": "Large Cap (Top 50)"
+  },
+  "INDIGO.NS": {
+    "rank": 47,
+    "market_cap": 1874559662256.0,
+    "tier": "Large Cap (Top 50)"
+  },
+  "TORNTPHARM.NS": {
+    "rank": 48,
+    "market_cap": 1866084701536.0,
+    "tier": "Large Cap (Top 50)"
+  },
+  "SOLARINDS.NS": {
+    "rank": 49,
+    "market_cap": 1749172763150.0,
+    "tier": "Large Cap (Top 50)"
+  },
+  "SBILIFE.NS": {
+    "rank": 50,
+    "market_cap": 1738399288972.5,
+    "tier": "Large Cap (Top 50)"
+  },
+  "MOTHERSON.NS": {
+    "rank": 51,
+    "market_cap": 1714589731008.0962,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "HYUNDAI.NS": {
+    "rank": 52,
+    "market_cap": 1680416328259.7168,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "DLF.NS": {
+    "rank": 53,
+    "market_cap": 1650414079975.5,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "ADANIENSOL.NS": {
+    "rank": 54,
+    "market_cap": 1596567057974.0,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "WIPRO.NS": {
+    "rank": 55,
+    "market_cap": 1595696782822.5076,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "PIDILITIND.NS": {
+    "rank": 56,
+    "market_cap": 1518032291253.9033,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "IDEA.NS": {
+    "rank": 57,
+    "market_cap": 1494050448530.8313,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "ABB.NS": {
+    "rank": 58,
+    "market_cap": 1476365648625.0,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "JIOFIN.NS": {
+    "rank": 59,
+    "market_cap": 1472632672973.1248,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "VBL.NS": {
+    "rank": 60,
+    "market_cap": 1452950533039.9822,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "BHEL.NS": {
+    "rank": 61,
+    "market_cap": 1427645975550.0,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "TRENT.NS": {
+    "rank": 62,
+    "market_cap": 1400481263272.933,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "BOSCHLTD.NS": {
+    "rank": 63,
+    "market_cap": 1392805842000.0,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "CHOLAFIN.NS": {
+    "rank": 64,
+    "market_cap": 1390503983515.3447,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "CGPOWER.NS": {
+    "rank": 65,
+    "market_cap": 1376565434988.75,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "POWERINDIA.NS": {
+    "rank": 66,
+    "market_cap": 1358119900610.0,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "TECHM.NS": {
+    "rank": 67,
+    "market_cap": 1355994420124.6094,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "SIEMENS.NS": {
+    "rank": 68,
+    "market_cap": 1355145375065.1965,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "CUMMINSIND.NS": {
+    "rank": 69,
+    "market_cap": 1348578000000.0,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "UNIONBANK.NS": {
+    "rank": 70,
+    "market_cap": 1335575688251.7341,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "PNB.NS": {
+    "rank": 71,
+    "market_cap": 1306862568482.1763,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "BPCL.NS": {
+    "rank": 72,
+    "market_cap": 1301856663263.377,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "BSE.NS": {
+    "rank": 73,
+    "market_cap": 1280078198135.2573,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "APOLLOHOSP.NS": {
+    "rank": 74,
+    "market_cap": 1274147738005.5,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "POLYCAB.NS": {
+    "rank": 75,
+    "market_cap": 1236487832550.5,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "ZYDUSLIFE.NS": {
+    "rank": 76,
+    "market_cap": 1222440946116.0,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "LTM.NS": {
+    "rank": 77,
+    "market_cap": 1208672381709.0,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "BAJAJHLDNG.NS": {
+    "rank": 78,
+    "market_cap": 1205976474360.0,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "BANKBARODA.NS": {
+    "rank": 79,
+    "market_cap": 1189982154166.039,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "BRITANNIA.NS": {
+    "rank": 80,
+    "market_cap": 1173028601520.0,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "JINDALSTEL.NS": {
+    "rank": 81,
+    "market_cap": 1169806015438.864,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "TATAPOWER.NS": {
+    "rank": 82,
+    "market_cap": 1158789867216.745,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "HDFCLIFE.NS": {
+    "rank": 83,
+    "market_cap": 1150425883737.0938,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "GAIL.NS": {
+    "rank": 84,
+    "market_cap": 1134792971506.7092,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "LODHA.NS": {
+    "rank": 85,
+    "market_cap": 1131320500141.203,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "CIPLA.NS": {
+    "rank": 86,
+    "market_cap": 1120678077681.1926,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "MUTHOOTFIN.NS": {
+    "rank": 87,
+    "market_cap": 1113753826516.247,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "CANBK.NS": {
+    "rank": 88,
+    "market_cap": 1102446962444.8293,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "INDIANB.NS": {
+    "rank": 89,
+    "market_cap": 1099594013004.4873,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "PFC.NS": {
+    "rank": 90,
+    "market_cap": 1093158708000.0,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "LAURUSLABS.NS": {
+    "rank": 91,
+    "market_cap": 1083866309308.0,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "GVT&D.NS": {
+    "rank": 92,
+    "market_cap": 1076906096551.9556,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "HEROMOTOCO.NS": {
+    "rank": 93,
+    "market_cap": 1063350232791.0,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "PAYTM.NS": {
+    "rank": 94,
+    "market_cap": 1051825544770.0,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "ABCAPITAL.NS": {
+    "rank": 95,
+    "market_cap": 1048849644388.9803,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "TMPV.NS": {
+    "rank": 96,
+    "market_cap": 1046522194101.7999,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "MARICO.NS": {
+    "rank": 97,
+    "market_cap": 1045662851984.3262,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "INDHOTEL.NS": {
+    "rank": 98,
+    "market_cap": 1037216297655.0,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "IRFC.NS": {
+    "rank": 99,
+    "market_cap": 1032150647750.1068,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "VEDL.NS": {
+    "rank": 100,
+    "market_cap": 1021300845338.5632,
+    "tier": "Large-Mid Cap (51-100)"
+  },
+  "DRREDDY.NS": {
+    "rank": 101,
+    "market_cap": 1015163196614.2273,
+    "tier": "Mid Cap (101-200)"
+  },
+  "GMRAIRPORT.NS": {
+    "rank": 102,
+    "market_cap": 1011655460182.3701,
+    "tier": "Mid Cap (101-200)"
+  },
+  "MANKIND.NS": {
+    "rank": 103,
+    "market_cap": 1010390878989.7827,
+    "tier": "Mid Cap (101-200)"
+  },
+  "UNITDSPR.NS": {
+    "rank": 104,
+    "market_cap": 1007497628652.037,
+    "tier": "Mid Cap (101-200)"
+  },
+  "HDFCAMC.NS": {
+    "rank": 105,
+    "market_cap": 993176173399.7505,
+    "tier": "Mid Cap (101-200)"
+  },
+  "AUROPHARMA.NS": {
+    "rank": 106,
+    "market_cap": 973366756876.8762,
+    "tier": "Mid Cap (101-200)"
+  },
+  "INDUSTOWER.NS": {
+    "rank": 107,
+    "market_cap": 970226799105.593,
+    "tier": "Mid Cap (101-200)"
+  },
+  "MAXHEALTH.NS": {
+    "rank": 108,
+    "market_cap": 968541007007.6427,
+    "tier": "Mid Cap (101-200)"
+  },
+  "BHARATFORG.NS": {
+    "rank": 109,
+    "market_cap": 964538137040.4712,
+    "tier": "Mid Cap (101-200)"
+  },
+  "TATACONSUM.NS": {
+    "rank": 110,
+    "market_cap": 950102411520.0,
+    "tier": "Mid Cap (101-200)"
+  },
+  "LUPIN.NS": {
+    "rank": 111,
+    "market_cap": 943480647901.7881,
+    "tier": "Mid Cap (101-200)"
+  },
+  "AMBUJACEM.NS": {
+    "rank": 112,
+    "market_cap": 936279085352.559,
+    "tier": "Mid Cap (101-200)"
+  },
+  "NYKAA.NS": {
+    "rank": 113,
+    "market_cap": 933075388246.3254,
+    "tier": "Mid Cap (101-200)"
+  },
+  "OFSS.NS": {
+    "rank": 114,
+    "market_cap": 930249541560.0,
+    "tier": "Mid Cap (101-200)"
+  },
+  "ASHOKLEY.NS": {
+    "rank": 115,
+    "market_cap": 917789773750.0,
+    "tier": "Mid Cap (101-200)"
+  },
+  "JSWENERGY.NS": {
+    "rank": 116,
+    "market_cap": 911880384397.6831,
+    "tier": "Mid Cap (101-200)"
+  },
+  "GODREJCP.NS": {
+    "rank": 117,
+    "market_cap": 883265695164.9811,
+    "tier": "Mid Cap (101-200)"
+  },
+  "MAZDOCK.NS": {
+    "rank": 118,
+    "market_cap": 868235072607.4219,
+    "tier": "Mid Cap (101-200)"
+  },
+  "MCX.NS": {
+    "rank": 119,
+    "market_cap": 837071365746.1084,
+    "tier": "Mid Cap (101-200)"
+  },
+  "PERSISTENT.NS": {
+    "rank": 120,
+    "market_cap": 827243377980.0,
+    "tier": "Mid Cap (101-200)"
+  },
+  "DIXON.NS": {
+    "rank": 121,
+    "market_cap": 823014423648.0,
+    "tier": "Mid Cap (101-200)"
+  },
+  "NAUKRI.NS": {
+    "rank": 122,
+    "market_cap": 807599245125.0115,
+    "tier": "Mid Cap (101-200)"
+  },
+  "RECLTD.NS": {
+    "rank": 123,
+    "market_cap": 807346494471.9238,
+    "tier": "Mid Cap (101-200)"
+  },
+  "SHREECEM.NS": {
+    "rank": 124,
+    "market_cap": 798827760720.0,
+    "tier": "Mid Cap (101-200)"
+  },
+  "FEDERALBNK.NS": {
+    "rank": 125,
+    "market_cap": 798393809297.1581,
+    "tier": "Mid Cap (101-200)"
+  },
+  "COFORGE.NS": {
+    "rank": 126,
+    "market_cap": 785640410025.3452,
+    "tier": "Mid Cap (101-200)"
+  },
+  "ICICIGI.NS": {
+    "rank": 127,
+    "market_cap": 764410637880.0,
+    "tier": "Mid Cap (101-200)"
+  },
+  "SAIL.NS": {
+    "rank": 128,
+    "market_cap": 760636206758.6244,
+    "tier": "Mid Cap (101-200)"
+  },
+  "OIL.NS": {
+    "rank": 129,
+    "market_cap": 757185926710.5,
+    "tier": "Mid Cap (101-200)"
+  },
+  "NHPC.NS": {
+    "rank": 130,
+    "market_cap": 754884380923.2567,
+    "tier": "Mid Cap (101-200)"
+  },
+  "AUBANK.NS": {
+    "rank": 131,
+    "market_cap": 749640665606.8573,
+    "tier": "Mid Cap (101-200)"
+  },
+  "SRF.NS": {
+    "rank": 132,
+    "market_cap": 739295893082.0496,
+    "tier": "Mid Cap (101-200)"
+  },
+  "HINDPETRO.NS": {
+    "rank": 133,
+    "market_cap": 734630723994.25,
+    "tier": "Mid Cap (101-200)"
+  },
+  "NAM-INDIA.NS": {
+    "rank": 134,
+    "market_cap": 711982716402.825,
+    "tier": "Mid Cap (101-200)"
+  },
+  "WAAREEENER.NS": {
+    "rank": 135,
+    "market_cap": 707334632765.0,
+    "tier": "Mid Cap (101-200)"
+  },
+  "IDFCFIRSTB.NS": {
+    "rank": 136,
+    "market_cap": 701553057107.5148,
+    "tier": "Mid Cap (101-200)"
+  },
+  "LTF.NS": {
+    "rank": 137,
+    "market_cap": 698810891644.9897,
+    "tier": "Mid Cap (101-200)"
+  },
+  "PHOENIXLTD.NS": {
+    "rank": 138,
+    "market_cap": 697829500958.0,
+    "tier": "Mid Cap (101-200)"
+  },
+  "NMDC.NS": {
+    "rank": 139,
+    "market_cap": 694641523406.8485,
+    "tier": "Mid Cap (101-200)"
+  },
+  "INDUSINDBK.NS": {
+    "rank": 140,
+    "market_cap": 694062099938.5562,
+    "tier": "Mid Cap (101-200)"
+  },
+  "UNOMINDA.NS": {
+    "rank": 141,
+    "market_cap": 688225444307.4409,
+    "tier": "Mid Cap (101-200)"
+  },
+  "DABUR.NS": {
+    "rank": 142,
+    "market_cap": 680933415257.4744,
+    "tier": "Mid Cap (101-200)"
+  },
+  "YESBANK.NS": {
+    "rank": 143,
+    "market_cap": 678003874704.379,
+    "tier": "Mid Cap (101-200)"
+  },
+  "SWIGGY.NS": {
+    "rank": 144,
+    "market_cap": 677925440133.75,
+    "tier": "Mid Cap (101-200)"
+  },
+  "HAVELLS.NS": {
+    "rank": 145,
+    "market_cap": 677452803334.0,
+    "tier": "Mid Cap (101-200)"
+  },
+  "OBEROIRLTY.NS": {
+    "rank": 146,
+    "market_cap": 668300911606.0,
+    "tier": "Mid Cap (101-200)"
+  },
+  "GLENMARK.NS": {
+    "rank": 147,
+    "market_cap": 661139544188.2031,
+    "tier": "Mid Cap (101-200)"
+  },
+  "ICICIPRULI.NS": {
+    "rank": 148,
+    "market_cap": 654810517362.8213,
+    "tier": "Mid Cap (101-200)"
+  },
+  "NATIONALUM.NS": {
+    "rank": 149,
+    "market_cap": 637219420919.4717,
+    "tier": "Mid Cap (101-200)"
+  },
+  "RBLBANK.NS": {
+    "rank": 150,
+    "market_cap": 630897842245.0741,
+    "tier": "Mid Cap (101-200)"
+  },
+  "PRESTIGE.NS": {
+    "rank": 151,
+    "market_cap": 630115266908.6748,
+    "tier": "Mid Cap (101-200)"
+  },
+  "MAHABANK.NS": {
+    "rank": 152,
+    "market_cap": 629707624881.9866,
+    "tier": "Mid Cap (101-200)"
+  },
+  "ALKEM.NS": {
+    "rank": 153,
+    "market_cap": 623352127500.0,
+    "tier": "Mid Cap (101-200)"
+  },
+  "FORTIS.NS": {
+    "rank": 154,
+    "market_cap": 619707377354.2046,
+    "tier": "Mid Cap (101-200)"
+  },
+  "BIOCON.NS": {
+    "rank": 155,
+    "market_cap": 614029578161.0162,
+    "tier": "Mid Cap (101-200)"
+  },
+  "MOTILALOFS.NS": {
+    "rank": 156,
+    "market_cap": 612021871195.0,
+    "tier": "Mid Cap (101-200)"
+  },
+  "APLAPOLLO.NS": {
+    "rank": 157,
+    "market_cap": 606322645440.9607,
+    "tier": "Mid Cap (101-200)"
+  },
+  "RADICO.NS": {
+    "rank": 158,
+    "market_cap": 605215194613.6304,
+    "tier": "Mid Cap (101-200)"
+  },
+  "BANKINDIA.NS": {
+    "rank": 159,
+    "market_cap": 601817176321.4518,
+    "tier": "Mid Cap (101-200)"
+  },
+  "ATHERENERG.NS": {
+    "rank": 160,
+    "market_cap": 584990532725.0,
+    "tier": "Mid Cap (101-200)"
+  },
+  "KALYANKJIL.NS": {
+    "rank": 161,
+    "market_cap": 582058422605.5532,
+    "tier": "Mid Cap (101-200)"
+  },
+  "SBICARD.NS": {
+    "rank": 162,
+    "market_cap": 564562674264.75,
+    "tier": "Mid Cap (101-200)"
+  },
+  "SUZLON.NS": {
+    "rank": 163,
+    "market_cap": 548344801928.5393,
+    "tier": "Mid Cap (101-200)"
+  },
+  "POLICYBZR.NS": {
+    "rank": 164,
+    "market_cap": 542043167451.0,
+    "tier": "Mid Cap (101-200)"
+  },
+  "SONACOMS.NS": {
+    "rank": 165,
+    "market_cap": 512971166923.11035,
+    "tier": "Mid Cap (101-200)"
+  },
+  "GODREJPROP.NS": {
+    "rank": 166,
+    "market_cap": 503801316232.5,
+    "tier": "Mid Cap (101-200)"
+  },
+  "COLPAL.NS": {
+    "rank": 167,
+    "market_cap": 498930453649.87427,
+    "tier": "Mid Cap (101-200)"
+  },
+  "MFSL.NS": {
+    "rank": 168,
+    "market_cap": 491706814955.3342,
+    "tier": "Mid Cap (101-200)"
+  },
+  "TIINDIA.NS": {
+    "rank": 169,
+    "market_cap": 479052786987.77344,
+    "tier": "Mid Cap (101-200)"
+  },
+  "VMM.NS": {
+    "rank": 170,
+    "market_cap": 476960356099.0689,
+    "tier": "Mid Cap (101-200)"
+  },
+  "UPL.NS": {
+    "rank": 171,
+    "market_cap": 461567406887.7398,
+    "tier": "Mid Cap (101-200)"
+  },
+  "SUPREMEIND.NS": {
+    "rank": 172,
+    "market_cap": 446209574842.8345,
+    "tier": "Mid Cap (101-200)"
+  },
+  "KEI.NS": {
+    "rank": 173,
+    "market_cap": 438137526885.0,
+    "tier": "Mid Cap (101-200)"
+  },
+  "PETRONET.NS": {
+    "rank": 174,
+    "market_cap": 437025034794.074,
+    "tier": "Mid Cap (101-200)"
+  },
+  "360ONE.NS": {
+    "rank": 175,
+    "market_cap": 429941566800.0,
+    "tier": "Mid Cap (101-200)"
+  },
+  "PATANJALI.NS": {
+    "rank": 176,
+    "market_cap": 429766861415.1185,
+    "tier": "Mid Cap (101-200)"
+  },
+  "RVNL.NS": {
+    "rank": 177,
+    "market_cap": 426386610450.0,
+    "tier": "Mid Cap (101-200)"
+  },
+  "MPHASIS.NS": {
+    "rank": 178,
+    "market_cap": 421648426067.7612,
+    "tier": "Mid Cap (101-200)"
+  },
+  "PAGEIND.NS": {
+    "rank": 179,
+    "market_cap": 417154887600.0,
+    "tier": "Mid Cap (101-200)"
+  },
+  "BDL.NS": {
+    "rank": 180,
+    "market_cap": 410110142898.5596,
+    "tier": "Mid Cap (101-200)"
+  },
+  "PREMIERENE.NS": {
+    "rank": 181,
+    "market_cap": 403548057037.4436,
+    "tier": "Mid Cap (101-200)"
+  },
+  "VOLTAS.NS": {
+    "rank": 182,
+    "market_cap": 371451201045.7593,
+    "tier": "Mid Cap (101-200)"
+  },
+  "ASTRAL.NS": {
+    "rank": 183,
+    "market_cap": 368480557011.9581,
+    "tier": "Mid Cap (101-200)"
+  },
+  "PIIND.NS": {
+    "rank": 184,
+    "market_cap": 357571367266.0,
+    "tier": "Mid Cap (101-200)"
+  },
+  "COCHINSHIP.NS": {
+    "rank": 185,
+    "market_cap": 354922273875.1294,
+    "tier": "Mid Cap (101-200)"
+  },
+  "CONCOR.NS": {
+    "rank": 186,
+    "market_cap": 345469899964.547,
+    "tier": "Mid Cap (101-200)"
+  },
+  "BLUESTARCO.NS": {
+    "rank": 187,
+    "market_cap": 322493127722.6404,
+    "tier": "Mid Cap (101-200)"
+  },
+  "IREDA.NS": {
+    "rank": 188,
+    "market_cap": 318117342787.15454,
+    "tier": "Mid Cap (101-200)"
+  },
+  "JUBLFOOD.NS": {
+    "rank": 189,
+    "market_cap": 317130679413.6539,
+    "tier": "Mid Cap (101-200)"
+  },
+  "LICHSGFIN.NS": {
+    "rank": 190,
+    "market_cap": 313700922185.3638,
+    "tier": "Mid Cap (101-200)"
+  },
+  "DELHIVERY.NS": {
+    "rank": 191,
+    "market_cap": 306311528900.5402,
+    "tier": "Mid Cap (101-200)"
+  },
+  "GODFRYPHLP.NS": {
+    "rank": 192,
+    "market_cap": 302776190527.85156,
+    "tier": "Mid Cap (101-200)"
+  },
+  "MANAPPURAM.NS": {
+    "rank": 193,
+    "market_cap": 298145273041.5474,
+    "tier": "Mid Cap (101-200)"
+  },
+  "BANDHANBNK.NS": {
+    "rank": 194,
+    "market_cap": 295548873450.5852,
+    "tier": "Mid Cap (101-200)"
+  },
+  "PNBHOUSING.NS": {
+    "rank": 195,
+    "market_cap": 284641397015.48303,
+    "tier": "Mid Cap (101-200)"
+  },
+  "CDSL.NS": {
+    "rank": 196,
+    "market_cap": 271428289794.92188,
+    "tier": "Mid Cap (101-200)"
+  },
+  "ANGELONE.NS": {
+    "rank": 197,
+    "market_cap": 256452369608.1565,
+    "tier": "Mid Cap (101-200)"
+  },
+  "AMBER.NS": {
+    "rank": 198,
+    "market_cap": 245128614533.5,
+    "tier": "Mid Cap (101-200)"
+  },
+  "KAYNES.NS": {
+    "rank": 199,
+    "market_cap": 243063086240.1482,
+    "tier": "Mid Cap (101-200)"
+  },
+  "FORCEMOT.NS": {
+    "rank": 200,
+    "market_cap": 225208670104.0,
+    "tier": "Mid Cap (101-200)"
+  },
+  "NBCC.NS": {
+    "rank": 201,
+    "market_cap": 218861993408.20312,
+    "tier": "Small Cap (200+)"
+  },
+  "SAGILITY.NS": {
+    "rank": 202,
+    "market_cap": 204059106236.98404,
+    "tier": "Small Cap (200+)"
+  },
+  "TATAELXSI.NS": {
+    "rank": 203,
+    "market_cap": 197682743093.0415,
+    "tier": "Small Cap (200+)"
+  },
+  "CAMS.NS": {
+    "rank": 204,
+    "market_cap": 173510325607.82404,
+    "tier": "Small Cap (200+)"
+  },
+  "KFINTECH.NS": {
+    "rank": 205,
+    "market_cap": 152222507053.19513,
+    "tier": "Small Cap (200+)"
+  },
+  "PGEL.NS": {
+    "rank": 206,
+    "market_cap": 146944168527.74854,
+    "tier": "Small Cap (200+)"
+  },
+  "CROMPTON.NS": {
+    "rank": 207,
+    "market_cap": 140051485312.5,
+    "tier": "Small Cap (200+)"
+  },
+  "KPITTECH.NS": {
+    "rank": 208,
+    "market_cap": 138795049268.69308,
+    "tier": "Small Cap (200+)"
+  },
+  "INOXWIND.NS": {
+    "rank": 209,
+    "market_cap": 126697110511.48938,
+    "tier": "Small Cap (200+)"
+  },
+  "IEX.NS": {
+    "rank": 210,
+    "market_cap": 99213480746.05234,
+    "tier": "Small Cap (200+)"
+  }
+}

@@ -27,7 +27,7 @@ def download_many(tickers: List[str], interval: str, start: str, end: str = None
         for attempt in range(3):
             try:
                 kwargs = dict(interval=interval, progress=False, auto_adjust=True,
-                              group_by="ticker", threads=True)
+                              group_by="ticker", threads=True, timeout=20)
                 if period is not None:
                     df = yf.download(chunk, period=period, **kwargs)
                 else:
