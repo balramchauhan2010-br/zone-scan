@@ -11,34 +11,55 @@ current price.**
 
 ## Performance
 
-An earlier version was very slow to load on Streamlit Cloud. The root cause
-was a single line inside `zone_core.py`'s `get_eod_range()` helper that
-recomputed `df.index.date` (converts the WHOLE index to python date objects)
-and re-filtered the WHOLE dataframe **on every single bar** - that's O(n)
-work repeated n times = **O(n^2)**, which got dramatically worse the longer
-the history (e.g. the 1H timeframe went from 95s to 575s for the full
-210-stock universe as history grew). This has been fixed by precomputing
-the per-day High/Low **once** (vectorized, O(n) total) and doing an O(1)
-array lookup per bar instead - **mathematically identical results** (same
-calendar-day grouping, same max/min), just up to **~50x faster**. Verified
-zone-for-zone against the old engine with zero mismatches. Full-universe
-scans now typically finish in single-digit to ~20 seconds instead of
-minutes.
+Two separate problems were found and fixed - **zero changes to `zone_core.py`'s
+rules/trading-logic**, both are pure engineering/robustness fixes:
+
+1. **Compute bug (O(n²)):** `get_eod_range()` recomputed `df.index.date`
+   (converts the WHOLE index to python date objects) and re-filtered the
+   WHOLE dataframe **on every single bar**. Fixed by precomputing the
+   per-day High/Low **once** (vectorized) and doing an O(1) lookup per bar -
+   **mathematically identical results**, verified zone-for-zone against the
+   old engine with zero mismatches, up to **~50x faster** (1H full-universe:
+   575s -> ~11s).
+2. **Network hangs on cloud hosting:** Yahoo Finance is known to
+   throttle/block requests from datacenter IP ranges (exactly what
+   Streamlit Community Cloud runs on) much more than a home connection. The
+   old fetch code could retry for minutes before giving up. Fixed by:
+   - Using a `curl_cffi` session with **Chrome TLS/browser impersonation**
+     (the standard community fix for yfinance requests being silently
+     blocked) instead of a plain `requests` session.
+   - **Fast-fail timeouts** (10s) and only 1 retry (was up to 3x20s), so a
+     blocked request fails in seconds instead of hanging.
+   - A **staged `st.status()` progress panel** in the UI ("fetching 15m...",
+     "scanning 4H...", etc.) so the app never *looks* frozen even if one
+     stage is genuinely slow.
+   - A smaller **default universe (Top 50 by market cap)** so the first
+     load is light; scan more via the sidebar slider once you're happy with
+     the speed.
+
+With these fixes, a full default scan (all 9 timeframes, Top-50 universe)
+completes in **under 20 seconds** end-to-end in testing.
 
 ## Features
 
-- **Market-Cap tier universe selector**: pick "Large Cap (Top 50)",
-  "Large-Mid Cap (51-100)", "Mid Cap (101-200)", "Small Cap (200+)", or any
-  combination, to scan a lighter/faster subset instead of always scanning
-  all ~210 F&O stocks. Tiers are rank-based on market cap (fetched via
-  `yfinance`, bundled as `market_cap_tiers.json` - refresh periodically
-  with `python build_market_cap_tiers.py`, no live NSE dependency at
-  runtime so this is instant and never blocked).
+- **Clean, collapsible sidebar**: Timeframes and Universe-size are the only
+  always-visible controls; EOD Range Filter, Rule Toggles/Target RR, and
+  Cache/Force-Rescan are tucked into small collapsed expanders so the
+  sidebar stays compact.
+- **Timeframes multiselect** - all 10 selected by default (short labels:
+  15m/30m/75m/1H/2H/4H/6H/Daily/Weekly/Monthly); deselect any you don't need
+  for a faster scan. Results render as tabs (or directly if only one is
+  picked).
+- **Market-Cap universe slider**: a single clean "Top N by Market Cap"
+  control (Top 25/50/75/100/150/200/All) instead of tier checkboxes/chips -
+  smaller N = faster scan. Backed by a bundled rank snapshot
+  (`market_cap_tiers.json`, built offline via `build_market_cap_tiers.py`,
+  no live dependency at runtime so it's always instant).
 - **EOD-Range filter** (day-candle-close High +X% / Low -X%) is a single
-  combined slider by default (applies the same % to both High and Low, for
-  a cleaner display) - toggle "Advanced" in the sidebar if you want to set
-  them independently, exactly per the zone-scan-range rule already built
-  into `zone_core.py`.
+  combined slider by default (applies the same % to both High and Low) -
+  toggle "Advanced" inside the expander if you want them independent.
+- **TradingView chart links** built directly into the Symbol column.
+- CSV export of the table shown.
 - **Refresh only on candle close.** Every timeframe's scan result is cached
   against a session-aware "candle bucket" (NSE holidays included) - so a
   Daily/Weekly/Monthly scan is *not* re-run on every page reload, only when

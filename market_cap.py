@@ -26,6 +26,17 @@ def load_tiers() -> Dict[str, dict]:
         return json.load(f)
 
 
+def top_n_tickers(tickers: List[str], n: int) -> List[str]:
+    """Return the top-N tickers by market cap rank (capital size), from the
+    bundled snapshot. If a ticker has no rank info it's placed at the end."""
+    tiers = load_tiers()
+    if not tiers:
+        return tickers[:n]
+    ranked = sorted(tickers, key=lambda t: (tiers.get(t, {}).get("rank") is None,
+                                             tiers.get(t, {}).get("rank") or 9999))
+    return ranked[:n]
+
+
 def filter_tickers_by_tier(tickers: List[str], selected_tiers: List[str]) -> List[str]:
     tiers = load_tiers()
     if not tiers:
