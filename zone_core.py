@@ -14,11 +14,26 @@ duplicate check, zone levels (SL/TP/legOutMidLevel) aur state machine
 Note: Pine ke "PARITY INPUTS" (closing-wick, coverage, HQ-colour, white-area,
 boring %, body mult, scan-once flags, scanAfterCandleComplete) Pine me bhi
 logic se jude nahi hain, isliye yahan bhi sirf config me rakhe hain (inert).
+
+Compatibility fix:
+    Legacy Zone fields are retained with neutral defaults so older scanner.py
+    display-column accesses (including z.whiteAreaOK) keep working. Retired
+    checks do not run; isHQ stays score-based. Standalone legacy helpers remain
+    importable but are not called by scan_zones / ZoneEngine.
+    Timestamp conversion supports naive and timezone-aware DatetimeIndex.
+
+Scope:
+    A batch scan evaluates the supplied OHLCV rows. It does not reproduce
+    TradingView realtime tick rollback or fetch candles from TradingView.
+    EOD grouping uses all supplied rows for each date; on intraday historical
+    data this can include later candles of the same day. Use for EOD scanning,
+    not as a guarantee of lookahead-free intraday backtesting.
 """
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -132,6 +147,21 @@ class Zone:
     entryTimestamp: object = None
     breakBarIndex: Optional[int] = None
 
+    # Backward-compatible fields expected by the original scanner.py / app.py.
+    # Retired non-Pine rules are NOT run. Neutral values mean not evaluated,
+    # not a successful validation or a measured win probability.
+    # Keep these real dataclass fields (not __getattr__) for asdict/serialization.
+    baseColourOK: bool = False
+    retestVolX: float = float("nan")
+    entryStatus: str = ""
+    entryPrice: float = 0.0
+    hqProbabilityPct: float = float("nan")
+    hqReason: str = ""
+    whiteAreaOK: Optional[bool] = None
+    breakReason: str = ""
+    baseIndecision: bool = False
+    baseDojiCount: int = 0
+
 
 def _positive_float(value: Any, name: str) -> float:
     try:
@@ -142,6 +172,59 @@ def _positive_float(value: Any, name: str) -> float:
         raise ValueError(f"{name} must be a positive finite number")
     return r
 
+
+# Backward-compatible helpers; no role in accepting/rejecting a zone.
+def get_eod_range(df: pd.DataFrame, idx: int, high_buffer_pct: float = 10.0,
+                  low_buffer_pct: float = 10.0) -> tuple[float, float]:
+    try:
+        d = df.index[idx].date()
+        day = df[df.index.date == d]
+        if day.empty:
+            return float(df["low"].iloc[idx] * .9), float(df["high"].iloc[idx] * 1.1)
+        return (float(day["low"].min() * (1 - low_buffer_pct / 100)),
+                float(day["high"].max() * (1 + high_buffer_pct / 100)))
+    except Exception:
+        return float(df["low"].iloc[idx] * .9), float(df["high"].iloc[idx] * 1.1)
+
+
+def check_white_area(df: pd.DataFrame, base_start_idx: int, base_end_idx: int,
+                     leg_out_idx: int, curr_idx: int) -> bool:
+    """Display-only: no intervening wick/body touched the base range."""
+    bh = float(df["high"].iloc[base_start_idx:base_end_idx + 1].max())
+    bl = float(df["low"].iloc[base_start_idx:base_end_idx + 1].min())
+    if leg_out_idx + 1 >= curr_idx:
+        return True
+    window = df.iloc[leg_out_idx + 1:curr_idx]
+    return not bool(((window["low"] <= bh) & (window["high"] >= bl)).any())
+
+
+def check_leg_out_coverage(df: pd.DataFrame, leg_out_idx: int, curr_idx: int,
+                           max_cover_pct: float = 90.0) -> bool:
+    """Standalone legacy helper; coverage is NOT a Pine validity guard."""
+    hi, lo = float(df["high"].iloc[leg_out_idx]), float(df["low"].iloc[leg_out_idx])
+    rng = hi - lo
+    if rng <= 0 or leg_out_idx + 1 > curr_idx:
+        return True
+    window = df.iloc[leg_out_idx + 1:curr_idx + 1]
+    overlap = (np.minimum(window["high"], hi) - np.maximum(window["low"], lo)).clip(lower=0)
+    return not bool(((overlap / rng) > max_cover_pct / 100).any())
+
+SCAN_TRACKER: Dict[str, datetime] = {}
+
+def should_scan_now(tf: str, force: bool = False) -> bool:
+    """Legacy scheduling utility; scan_zones never calls it (like Pine)."""
+    now = datetime.now()
+    if force:
+        return True
+    days = {"Monthly": 30, "Weekly": 7, "Daily": 1}
+    key = tf if tf in days else f"Intraday_{tf}"
+    last = SCAN_TRACKER.get(key)
+    mins = {"3M": 3, "5M": 5, "10M": 10, "15M": 15, "30M": 30, "75M": 75,
+            "1H": 60, "2H": 120, "4H": 240, "6H": 360}.get(tf, 15)
+    if last is None or (now - last).total_seconds() >= (days[tf] * 86400 if tf in days else mins * 60):
+        SCAN_TRACKER[key] = now
+        return True
+    return False
 
 class ZoneEngine:
     def __init__(self, df: pd.DataFrame, **kwargs: Any):
@@ -162,7 +245,13 @@ class ZoneEngine:
         self.v = self.df["volume"].to_numpy(float)
         self.n = len(self.df)
         self.dow = self.df.index.dayofweek.to_numpy()
-        self.time_ms = self.df.index.astype("datetime64[ns]").astype(np.int64) // 10**6
+        # Pandas 2+ rejects astype(datetime64[ns]) on timezone-aware indexes.
+        # Normalize the timestamp representation to UTC without altering the
+        # original index used for local day-of-week and EOD date grouping.
+        time_index = self.df.index
+        if time_index.tz is not None:
+            time_index = time_index.tz_convert("UTC").tz_localize(None)
+        self.time_ms = time_index.astype("datetime64[ns]").astype(np.int64) // 10**6
         self.active_zones: List[Zone] = []
         self.live_zones: List[Zone] = []   # non-Broken zones (Pine me Broken skip hote hain)
         self._prepare()
