@@ -13,8 +13,9 @@ from datetime import datetime, timedelta
 #   legOutBodyHeavyPct) wapas aa gaye hain - config me available hain, lekin
 #   scoring jaan-boojh kar DISABLED hai: densityScore = 0, score10 = 0.0.
 #   + New EOD Range Option
-#   + New Rules: (1) Leg-in Closing-Side Small Wick  (2) Leg-out Coverage Guard
-#                (3) Boring-Colour High-Quality Zone Flag  (4) White-Area Check
+#   + New Rules: (2) Leg-out Coverage Guard  (3) Boring-Colour High-Quality
+#                Zone Flag  (4) White-Area Check
+#   (Rule 1 - Leg-in Closing-Side Small Wick Guard: REMOVED, Pine jaisa)
 # -----------------------------------------------------------------------------
 # CHANGES (is version me):
 #   (a) legInMinBodyPct: 0.55 -> 0.60 (Pine default par wapas)
@@ -25,8 +26,21 @@ from datetime import datetime, timedelta
 #       sirf DISPLAY-ONLY Doji/Indecision highlight tag ke liye hota hai
 #       (core scan logic me koi filter nahi).
 #   (e) Leg-out "full-range engulf" REJECT rule REMOVED (Pine me ye rule hai nahi)
-#   (f) Volume rule strict: legOutVol > legInVol (Pine jaisa, missing-volume
-#       escape hataya gaya)
+#   (f) Volume rule: legOutVol > legInVal. JAB data me volume column na ho
+#       (ya leg-out ka volume 0/NaN ho) to rule SKIP ho jaata hai -
+#       leg_out_volume_missing = not np.isfinite(leg_out_vol) or leg_out_vol <= 0
+#       passes_volume = leg_out_volume_missing or leg_out_vol > leg_in_vol
+#       Isse volume-less CSV par bhi zones scan hote hain (Pine me volume
+#       hamesha hota hai, wahan ye rule hamesha lagta hi hai). Volume data
+#       maujood hone par rule bilkul strict chalta hai, koi fark nahi padta.
+#   (g) RULE 1 - Leg-in Closing-Side "Small Wick" Guard POORI TARAH HATAYA
+#       gaya: config keys (enableClosingWickCheck, legInMinClosingWickPct),
+#       scan ka check block, aur _closing_side_wick_price() helper - teeno.
+#       Ye rule Pine script me hai hi nahi, aur ye leg-in candle ki baaki
+#       sharte (body% >= legInMinBodyPct, CLV >= minClvPct, TR hierarchy)
+#       ke saath directly contradict karta tha - perfect impulse leg-in
+#       (jo apne high/low par close karta hai) hamesha reject ho jata tha.
+#       Isliye zaroorat padne par almost koi zone hi nahi banta tha.
 #   Baaki koi logic/rule/state-machine/field nahi badla gaya.
 # -----------------------------------------------------------------------------
 
@@ -74,14 +88,6 @@ PINE_DEFAULTS: Dict[str, Any] = {
     "scanMonthlyOnce": True,   # Monthly एक बार
     "scanWeeklyOnce": True,    # Weekly एक बार
     "scanDailyOnce": True,     # Daily एक बार
-
-    # ------------------------------------------------------------------
-    # NEW RULE 1 - Leg-in Closing-Side "Small Wick" Guard
-    # Leg-in candle की Closing Side पर कम से कम इतना % (price के सापेक्ष) wick
-    # होना अनिवार्य है, ताकि perfect marubozu (zero wick) leg-in reject हो जाए।
-    # ------------------------------------------------------------------
-    "enableClosingWickCheck": True,
-    "legInMinClosingWickPct": 0.1,   # % of leg-in close price (changeable)
 
     # ------------------------------------------------------------------
     # NEW RULE 2 - Leg-out "Coverage" Guard
@@ -446,17 +452,6 @@ class ZoneEngine:
             return 0.0
         return abs(self.close[pos] - self.open[pos]) / candle_range
 
-    def _closing_side_wick_price(self, i: int, idx: int, is_bull: bool, is_bear: bool) -> float:
-        """NEW RULE 1 helper: Closing side wick in absolute price units.
-        Bullish candle -> upper wick above close (high - close).
-        Bearish candle -> lower wick below close (close - low)."""
-        pos = i - idx
-        if is_bull:
-            return float(self.high[pos] - self.close[pos])
-        if is_bear:
-            return float(self.close[pos] - self.low[pos])
-        return 0.0
-
     def _is_overnight_gap(self, i: int) -> bool:
         if i == 0:
             return False
@@ -497,16 +492,12 @@ class ZoneEngine:
                 continue
 
             # ------------------------------------------------------------
-            # NEW RULE 1: Leg-in Closing-Side Small Wick Guard
-            # Closing side पर कम से कम legInMinClosingWickPct% (of leg-in
-            # close price) का wick होना अनिवार्य है (perfect marubozu reject)।
+            # NEW RULE 1 (Leg-in Closing-Side Small Wick Guard): REMOVED.
+            # Ye rule Pine script me hai hi nahi aur ye leg-in candle ki
+            # baaki sharte (body% >= min, CLV >= minClvPct, TR hierarchy)
+            # ke saath directly contradict karta tha. Ab leg-in ke liye
+            # koi closing-side wick ki koi shart nahi hai.
             # ------------------------------------------------------------
-            if self.enableClosingWickCheck:
-                closing_wick_price = self._closing_side_wick_price(i, leg_in_idx, leg_in_is_bull, leg_in_is_bear)
-                min_required_wick = (self.legInMinClosingWickPct / 100.0) * leg_in_close
-                if closing_wick_price < min_required_wick:
-                    continue
-
             pos_prev = i - prev_idx
             if pos_prev < 0:
                 continue
@@ -579,8 +570,12 @@ class ZoneEngine:
             passes_strict_candle_hierarchy = max_base_tr < leg_in_tr < leg_out_tr
             passes_strict_body_hierarchy = max_base_body < leg_in_body_size and leg_out_body_size > self.legOutToLegInBodyMult * leg_in_body_size
             passes_leg_out_close_confirmation = leg_out_close > max_base_high if is_demand_leg_out else leg_out_close < min_base_low
-            # Pine jaisa strict volume rule: legOutVol > legInVol
-            passes_volume = leg_out_vol > leg_in_vol
+            # Volume rule: legOutVol > legInVol. Pine me volume hamesha
+            # maujood hota hai, isliye wahan ye rule hamesha lagta hai. Agar
+            # data me volume column na ho (ya 0/NaN ho) to rule skip kar diya
+            # jaata hai - zero zones na aayein, silently sab reject na ho.
+            leg_out_volume_missing = not np.isfinite(leg_out_vol) or leg_out_vol <= 0
+            passes_volume = leg_out_volume_missing or leg_out_vol > leg_in_vol
             is_overnight = self._is_overnight_gap(i)
             has_imbalance = True
             has_genuine_gap = False
