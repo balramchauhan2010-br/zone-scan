@@ -26,26 +26,59 @@ with gear_col:
 with settings_pop:
     st.subheader("⚙️ Scanner Settings")
 
+    # ---- NEW: Enable low TFs toggle (Requirement 1) ----
+    enable_low_tf = st.checkbox(
+        "⚡ Enable Low Timeframes (3m, 5m, 10m)",
+        value=False,
+        help="3m, 5m, 10m timeframes 1m data se bante hain, isliye thoda slow aur heavy ho sakta hai. "
+             "Enable karne par hi ye options dikhenge aur scan honge. Intraday scalping ke liye useful."
+    )
+
+    low_tfs = getattr(scanner, 'LOW_TF_LIST', ["3m", "5m", "10m"])
+    standard_tfs = getattr(scanner, 'STANDARD_TF_LIST', scanner.TF_LIST)
+    extended_tfs = getattr(scanner, 'EXTENDED_TF_LIST', low_tfs + standard_tfs)
+
+    available_tfs = extended_tfs if enable_low_tf else standard_tfs
+
     raw_tf_selected = st.multiselect(
         "Timeframes (custom bhi type kar sakte hain - jaise 5m, 3m, 45m, 3H)",
-        scanner.TF_LIST, default=scanner.TF_LIST, accept_new_options=True,
+        available_tfs, 
+        default=available_tfs, 
+        accept_new_options=True,
         help="Preset TFs ke alawa apna khud ka timeframe type karke Enter dabayein - "
-             "format '<number>m' (minutes) ya '<number>H' (hours), jaise '5m', '3m', '45m', '3H', '8H'.",
+             "format '<number>m' (minutes) ya '<number>H' (hours), jaise '5m', '3m', '45m', '3H', '8H'. "
+             "Low TF (3m/5m/10m) ke liye upar wala checkbox enable karna padega.",
     )
     tf_selected, invalid_tfs = [], []
     for _raw in (raw_tf_selected or []):
         _norm = scanner.normalize_tf(_raw)
         if _norm:
+            # Agar low TF disabled hai to ignore karo
+            if not enable_low_tf and _norm in low_tfs:
+                invalid_tfs.append(f"{_raw} (low TF disabled - checkbox enable karo)")
+                continue
             tf_selected.append(_norm)
         else:
             invalid_tfs.append(_raw)
     tf_selected = list(dict.fromkeys(tf_selected))
     if invalid_tfs:
-        st.warning(f"Samajh nahi aaya, ignore kiya: {', '.join(invalid_tfs)} "
-                    f"(format '5m' / '45m' / '3H' jaisa hona chahiye)")
+        st.warning(f"Samajh nahi aaya / disabled, ignore kiya: {', '.join(invalid_tfs)} "
+                    f"(format '5m' / '45m' / '3H' jaisa hona chahiye, low TF ke liye toggle ON karo)")
     if not tf_selected:
-        tf_selected = list(scanner.TF_LIST)
+        tf_selected = list(available_tfs)
     tf_selected = sorted(tf_selected, key=scanner.tf_minutes)
+
+    st.markdown("---")
+    st.subheader("🌍 Universe Type (Requirement 3)")
+
+    # ---- NEW: Exclusive selection NSE vs Global (Requirement 3) ----
+    scan_mode = st.radio(
+        "Kis universe ko scan karna hai? (ek hi select hoga)",
+        ["📊 NSE F&O Universe", "🌍 Top Global Instruments"],
+        index=0,
+        horizontal=True,
+        help="Pehle dono add hote the. Ab aapko ek chunna hai - ya to NSE F&O stocks ya to Global Instruments (Gold, Crude, DXY, Indices etc)."
+    )
 
     # ---- Universe size: single clean slider instead of tier chips ----
     @st.cache_data(show_spinner=False, ttl=24 * 3600)
@@ -56,28 +89,42 @@ with settings_pop:
     all_tickers = to_yahoo_tickers(symbols)
     total_n = len(all_tickers)
 
-    _size_options = sorted({n for n in [25, 50, 75, 100, 150, 200, total_n] if n <= total_n})
-    _size_labels = [f"All ({total_n})" if n == total_n else f"Top {n}" for n in _size_options]
-    _default_label = "Top 50" if "Top 50" in _size_labels else _size_labels[len(_size_labels) // 2]
-    universe_label = st.select_slider(
-        "Universe (Market-Cap size)", options=_size_labels, value=_default_label,
-        help="Market cap (capital size) ke hisaab se top-N NSE F&O stocks scan honge.",
-    )
-    _n_selected = total_n if universe_label.startswith("All") else int(universe_label.replace("Top ", ""))
-    tickers = list(mc.top_n_tickers(all_tickers, _n_selected))
+    # Default tickers will be set based on scan_mode
+    tickers = ()
+    universe_label = None
+    global_labels_selected = []
 
-    global_labels_selected = st.multiselect(
-        "🌍 + Top Global Instruments (optional add-on)", gi.labels(), default=[],
-        help="NSE F&O stocks ke alawa in global instruments ko bhi scan me add karein "
-             "(DXY, USDINR, Gold, Crude, world indices, GIFT/Nifty futures proxy, etc). "
-             "Data quality/availability Yahoo Finance par depend karti hai.",
-    )
-    global_tickers = [gi.label_to_yahoo(lbl) for lbl in global_labels_selected]
-    global_tickers = [t for t in global_tickers if t]
-    tickers = list(dict.fromkeys(tickers + global_tickers))
-    st.caption(f"{len(tickers)} tickers selected ({universe_source}"
-               f"{f' + {len(global_tickers)} global' if global_tickers else ''})")
-    tickers = tuple(tickers)
+    if scan_mode == "📊 NSE F&O Universe":
+        _size_options = sorted({n for n in [25, 50, 75, 100, 150, 200, total_n] if n <= total_n})
+        _size_labels = [f"All ({total_n})" if n == total_n else f"Top {n}" for n in _size_options]
+        # ---- Requirement 2: by default All selected ----
+        _default_label = f"All ({total_n})" if f"All ({total_n})" in _size_labels else _size_labels[-1]
+
+        universe_label = st.select_slider(
+            "Universe (Market-Cap size)", options=_size_labels, value=_default_label,
+            help="Market cap (capital size) ke hisaab se top-N NSE F&O stocks scan honge. By default All selected hai, aap kam/jyada kar sakte hain.",
+        )
+        _n_selected = total_n if universe_label.startswith("All") else int(universe_label.replace("Top ", ""))
+        tickers = list(mc.top_n_tickers(all_tickers, _n_selected))
+        st.caption(f"{len(tickers)} tickers selected ({universe_source}) - Mode: NSE F&O")
+        tickers = tuple(tickers)
+
+    else:  # Global mode
+        st.info("🌍 Global Mode: Sirf selected global instruments scan honge, NSE F&O nahi.")
+        global_labels_selected = st.multiselect(
+            "🌍 Top Global Instruments (select karo)", 
+            gi.labels(), 
+            default=gi.labels()[:8] if len(gi.labels()) >= 8 else gi.labels(),
+            help="NSE ke bajaye sirf ye global instruments scan honge "
+                 "(DXY, USDINR, Gold, Crude, world indices, GIFT/Nifty futures proxy, etc). "
+                 "Data quality/availability Yahoo Finance par depend karti hai.",
+        )
+        global_tickers = [gi.label_to_yahoo(lbl) for lbl in global_labels_selected]
+        global_tickers = [t for t in global_tickers if t]
+        tickers = tuple(dict.fromkeys(global_tickers))
+        if not tickers:
+            st.warning("⚠️ Kam se kam 1 global instrument select karo, warna scan empty rahega.")
+        st.caption(f"{len(tickers)} global tickers selected (live Yahoo Finance) - Mode: Global")
 
     st.markdown("---")
     st.subheader("🔍 Filters")
@@ -110,7 +157,8 @@ with settings_pop:
         force_rescan = st.button("🔄 Force Rescan (bypass cache)", width="stretch")
         st.caption(
             "Scan sirf tab dobara chalta hai jab us timeframe ki candle actually "
-            "CLOSE hoti hai (NSE session + holidays aware) - bade timeframes par load nahi badhta."
+            "CLOSE hoti hai (NSE session + holidays aware) - bade timeframes par load nahi badhta. "
+            "Low TF (3m/5m/10m) enable hai to 1m data fetch hoga jo thoda heavy hai."
         )
 
 # -----------------------------------------------------------------------------
@@ -182,9 +230,7 @@ if force_rescan:
     st.toast("Cache cleared - fresh scan chal raha hai...", icon="🔄")
 
 # -----------------------------------------------------------------------------
-# Live Market Watch ticker-tape (replaces the old Universe/Market/TF metrics
-# row - small clickable badges: GIFT NIFTY, NIFTY 50, BANK NIFTY, USD/INR,
-# XAUUSD, SPOTCRUDE, each with live price + %change).
+# Live Market Watch ticker-tape
 # -----------------------------------------------------------------------------
 def _badge(label: str, value: str, color: str) -> str:
     return (f'<span style="background:{color}22;border:1px solid {color};border-radius:6px;'
@@ -235,7 +281,6 @@ def cached_nifty_daily(bucket_key):
 def render_table(df: pd.DataFrame, file_label: str):
     df = apply_display_filters(df)
 
-    # ---- Small tag/badge summary row (instead of big st.metric numbers) ----
     badges = []
     if not df.empty:
         badges.append(_badge("Total Zones", str(len(df)), "#8b8b8b"))
@@ -288,12 +333,16 @@ def render_table(df: pd.DataFrame, file_label: str):
 
 
 # -----------------------------------------------------------------------------
-# Main scan - staged status feedback so it never LOOKS frozen, even on a
-# slow/blocked network (a common issue on free cloud hosting with Yahoo).
+# Main scan - staged status feedback
 # -----------------------------------------------------------------------------
+if not tickers:
+    st.error("❌ Koi ticker select nahi hai. Settings (⚙️) me jaake NSE Universe ya Global Instruments select karo.")
+    st.stop()
+
 needed_bases = {scanner.base_dataset_for_tf(tf) for tf in tf_selected}
 
 with st.status("Data fetch + scan chal raha hai...", expanded=True) as status_box:
+    st.write(f"🔹 Mode: {scan_mode} | Tickers: {len(tickers)} | TFs: {', '.join(tf_selected)}")
     for base in BASE_ORDER:
         if base not in needed_bases:
             continue
@@ -309,9 +358,6 @@ with st.status("Data fetch + scan chal raha hai...", expanded=True) as status_bo
     status_box.update(label="✅ Scan complete", state="complete", expanded=False)
 
 # ---- Combine ALL selected timeframes' zones into ONE unified table --------
-# (every timeframe above IS scanned every time regardless of how many are
-# selected - this just changes how the results are DISPLAYED: together in
-# one table instead of separate tabs.)
 ordered_tfs = sorted(tf_selected, key=scanner.tf_minutes)
 non_empty = [results[tf] for tf in ordered_tfs if not results[tf].empty]
 combined = pd.concat(non_empty, ignore_index=True) if non_empty else pd.DataFrame()
@@ -331,31 +377,19 @@ with st.expander("ℹ️ Methodology / Limitations"):
     st.markdown("""
 - **Data source**: Yahoo Finance (`yfinance`, with a Chrome-impersonating `curl_cffi` session and
   fast-fail timeouts to avoid hanging on cloud hosting where Yahoo can throttle requests).
-  15m/5m/1m are Yahoo's own native intraday granularities (60-day / 60-day / ~7-day lookback
-  limits respectively - a Yahoo limitation, fine for a *live* scanner).
-- **Custom timeframes** (e.g. '5m', '3m', '45m', '3H', '8H') are built by grouping native
+  15m/5m/15m/1m are Yahoo's own native intraday granularities.
+- **NEW Low TF (3m/5m/10m)**: 3m = 1m data ko 3-candle group karke, 5m = native 5m, 10m = 5m x2 group. 
+  Ye enable karne par hi dikhenge (⚙️ Settings > Enable Low Timeframes). Thoda heavy hai kyunki 1m data 7 din ka hi milta hai Yahoo se.
+- **Custom timeframes** (e.g. '3m', '45m', '3H', '8H') are built by grouping native
   1m/5m/15m/60m bars **per trading day starting at 09:15 IST** - the exact same session-aware
-  logic used for the built-in 30m/75m/2H/4H/6H presets. Type any `<number>m` or `<number>H`
-  value into the Timeframes box and press Enter to add it.
-- **Weekly/Monthly** are resampled from Daily bars.
-- **Entry = Proximal line**, **Stop Loss = Distal line + ATR buffer**, **Target = Entry +/- Risk x targetRR**
-  exactly as computed by `zone_core.py` (rules/logic unchanged - only a pure performance fix was
-  applied, verified zone-for-zone identical to the original).
+  logic used for the built-in 30m/75m/2H/4H/6H presets.
+- **Universe Type**: Ab aapko chunna hai - **NSE F&O Universe** YA **Top Global Instruments**. Pehle dono add hote the, ab exclusive hai taaki confusion na ho.
+- **Universe default All**: NSE mode me by default `All (213)` selected hai, aap slider se Top 25/50/100 etc kar sakte hain.
 - **All selected timeframes are always scanned together** - results from every selected timeframe
-  are shown in ONE combined table (use "View Timeframe(s)" above the table to narrow the display
-  without re-scanning). Symbol & Timeframe both encode the correct TradingView interval.
-- **Universe size** is a Top-N by market-cap slider (bundled rank snapshot, refreshed offline via
-  `build_market_cap_tiers.py`) - plus an optional **Top Global Instruments** add-on (DXY, USDINR,
-  Gold, Crude, world indices, GIFT/Nifty futures proxy, etc). GIFT NIFTY uses the regular Nifty 50
-  spot index as a proxy since a live GIFT Nifty feed isn't available via Yahoo Finance.
-- **Market Watch ticker-tape** (top of page) shows live price + %change for 6 key instruments -
-  cached for 3 minutes, independent of the main scan/candle-close cache.
-- **NIFTY50 nearest-zone badge**: a lightweight Daily-timeframe zone_core scan on the Nifty 50
-  index itself, always shown next to each results summary, highlighting the single zone closest
-  to the current price - purely informational, uses the exact same rule toggles/target RR set above.
+  are shown in ONE combined table.
+- **Market Watch ticker-tape** (top of page) shows live price + %change for 6 key instruments.
 - **Refresh-on-candle-close**: every timeframe's scan is cached against a session-aware "candle
-  bucket" key (NSE holidays included) - switching filters or reloading does **not** re-hit Yahoo
-  or re-scan unless that timeframe's own candle has actually closed. Use "Force Rescan" to bypass.
+  bucket" key (NSE holidays included).
 - **F&O universe list**: fetched live from `nseindia.com` when possible, falls back to a bundled
-  snapshot automatically when NSE blocks the request (common on cloud IPs).
+  snapshot automatically when NSE blocks the request.
     """)
