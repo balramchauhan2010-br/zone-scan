@@ -631,7 +631,6 @@ if "Main" in st.session_state.app_page:
 
 else:
     # ==================== VALIDATED ZONES SECOND PAGE ====================
-    st.info("✅ **Second Page - Validated Zones**: Yahan sirf wahi zones dikhenge jo `zone_core.py` ke basic scan ke baad `zone_core_validation.py` ke 5 rules (Fresh proximal, 1:3 RR, DBR/RBD engulf, Pulse/Trend) se validate hue hain. Same data, same tickers, par filter validated.")
     st.markdown(f"**Validation Preset:** `{preset_choice}` | **Params:** RR>={v_min_rr}, RR Filter={v_use_rr_filter}, Engulf={v_require_engulf}, PulseTrend={v_use_pulse_trend}, Aligned Required={v_require_aligned}")
 
     with st.status("Data fetch + VALIDATED scan chal raha hai (Second Page)...", expanded=True) as status_box:
