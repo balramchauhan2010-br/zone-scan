@@ -1,13 +1,17 @@
-"""Builds per-timeframe OHLCV frames and runs zone_core over the whole
+"""
+Builds per-timeframe OHLCV frames and runs zone_core over the whole
 NSE F&O universe (+ optional global instruments), returning a tidy table
 of currently LIVE zones.
 
-Custom timeframes: any string beyond the 10 presets in TF_LIST is accepted
+Custom timeframes: any string beyond the presets in TF_LIST is accepted
 as long as it normalises to '<N>m' or '<N>H' (see normalize_tf) - built by
 grouping native 1m/5m/15m/60m bars per trading day, the exact same
 session-aware way the existing 30m/75m/2H/4H/6H presets already work
 (see candle_clock.parse_custom_tf). zone_core.py itself is never touched.
+
+IMPROVED: 3m, 5m, 10m low timeframes added, toggleable from UI.
 """
+
 import re
 from typing import Dict, List, Optional
 
@@ -19,7 +23,17 @@ import candle_clock as cc
 from resample_utils import resample_session_n, resample_weekly, resample_monthly
 from fno_universe import chart_url
 
-TF_LIST = ["15m", "30m", "75m", "1H", "2H", "4H", "6H", "Daily", "Weekly", "Monthly"]
+# --- NEW: Low timeframe separation ---
+LOW_TF_LIST = ["3m", "5m", "10m"]
+STANDARD_TF_LIST = ["15m", "30m", "75m", "1H", "2H", "4H", "6H", "Daily", "Weekly", "Monthly"]
+
+# TF_LIST backward compatible = standard only, so old code doesn't break
+TF_LIST = STANDARD_TF_LIST
+
+# Full list when low TF enabled
+EXTENDED_TF_LIST = LOW_TF_LIST + STANDARD_TF_LIST
+FULL_TF_LIST = EXTENDED_TF_LIST  # alias
+
 MIN_BARS = 25
 
 _CUSTOM_TF_RE = re.compile(r"^(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours)$", re.IGNORECASE)
@@ -32,11 +46,14 @@ def normalize_tf(raw: str) -> Optional[str]:
     parse, or if the requested bar would span MORE than a single
     trading day (~6h15m session) - which this per-day grouping model
     (same one the 30m/75m/2H/4H/6H presets already use) can't build
-    sensibly; use Weekly/Monthly for multi-day bars instead."""
+    sensibly; use Weekly/Monthly for multi-day bars instead.
+    
+    NEW: 3m,5m,10m are now valid presets.
+    """
     if raw is None:
         return None
     tf = raw.strip()
-    if tf in TF_LIST:
+    if tf in STANDARD_TF_LIST or tf in LOW_TF_LIST or tf in EXTENDED_TF_LIST:
         return tf
     m = _CUSTOM_TF_RE.match(tf)
     if not m:
@@ -72,8 +89,12 @@ def group_size_for_tf(tf: str) -> int:
     return parsed["group"] if parsed else 1
 
 
-_PRESET_MINUTES = {"15m": 15, "30m": 30, "75m": 75, "1H": 60, "2H": 120, "4H": 240,
-                    "6H": 360, "Daily": 1440, "Weekly": 10080, "Monthly": 43200}
+# Includes low TFs for sorting
+_PRESET_MINUTES = {
+    "3m": 3, "5m": 5, "10m": 10,
+    "15m": 15, "30m": 30, "75m": 75, "1H": 60, "2H": 120, "4H": 240,
+    "6H": 360, "Daily": 1440, "Weekly": 10080, "Monthly": 43200
+}
 
 
 def tf_minutes(tf: str) -> int:
@@ -128,9 +149,6 @@ def scan_universe(tf: str, frames: Dict[str, pd.DataFrame], params: dict,
             reward = abs(z.tpVal - z.proxVal)
             rr = reward / risk if risk else np.nan
             rows.append({
-                # Interval is embedded in the link itself (and resolved
-                # correctly for global instruments too), so opening the
-                # chart from ANY row lands on the SAME timeframe as the zone.
                 "Symbol": chart_url(symbol, tf=tf),
                 "Timeframe": tf,
                 "Ticker": symbol,
