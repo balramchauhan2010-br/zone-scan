@@ -418,14 +418,15 @@ if len(tf_selected) > 1 and not combined.empty:
         combined = combined[combined["Timeframe"].isin(view_tfs)]
 
 # ---- NEW Requirement 2: Symbol sorting / grouping (bina anya logic change ke) ----
+# UPDATED: Distance % (Nearest First) me ab same stock ke saare zones ek saath ayenge
 if not combined.empty:
     st.markdown("#### 🔃 Table Sorting / Grouping (Display Only)")
     sort_option = st.radio(
         "Symbol ko kaise dikhana hai?",
-        ["Distance % (Default - Nearest First)", "Symbol A→Z ↑ (Ascending)", "Symbol Z→A ↓ (Descending)", "Symbol Grouped (ek Symbol ke saare TF ek saath)"],
+        ["Distance % (Default - Nearest First + Same Stock Grouped)", "Symbol A→Z ↑ (Ascending)", "Symbol Z→A ↓ (Descending)", "Symbol Grouped (ek Symbol ke saare TF ek saath, A-Z)"],
         index=0,
         horizontal=True,
-        help="Ye sirf display order badlega, zone detection logic same rahega. Grouped me ek hi symbol ke saare timeframes ek saath dikhenge."
+        help="Distance % me ab nearest stock pehle, uske saare zones ek saath, phir second nearest stock ke saare zones - aise क्रम me. Baki options sirf display order badlenge, scan logic same rahega."
     )
 
     # Sorting logic - sirf display ke liye, koi filter/scan logic change nahi
@@ -433,14 +434,29 @@ if not combined.empty:
         combined = combined.sort_values("Ticker", ascending=True)
     elif sort_option == "Symbol Z→A ↓ (Descending)":
         combined = combined.sort_values("Ticker", ascending=False)
-    elif "Grouped" in sort_option:
+    elif "Grouped" in sort_option and "A-Z" in sort_option:
         # Symbol wise group + uske andar TF chhote se bade
         combined["_tf_min"] = combined["Timeframe"].apply(lambda x: scanner.tf_minutes(x))
         combined = combined.sort_values(["Ticker", "_tf_min"], ascending=[True, True])
         combined = combined.drop(columns=["_tf_min"])
     else:
-        # Default: Distance % abs ke hisab se nearest first
-        if "Distance %" in combined.columns:
+        # NEW LOGIC: Distance % (Nearest First) + Same Stock ke saare zones ek saath
+        # Step 1: har row ka abs distance
+        # Step 2: har Ticker ka minimum abs distance nikalo (us stock ka nearest zone)
+        # Step 3: Ticker ko uske min distance se sort karo, phir same Ticker ke andar distance se sort
+        if "Distance %" in combined.columns and "Ticker" in combined.columns:
+            combined["_abs_dist"] = combined["Distance %"].abs()
+            # Har ticker ka sabse nearest zone ka distance
+            ticker_min_dist = combined.groupby("Ticker")["_abs_dist"].min()
+            combined["_ticker_min"] = combined["Ticker"].map(ticker_min_dist)
+            # TF order bhi andar sorted rakhe taaki same stock me 15m, 30m, 1H क्रम me aaye
+            combined["_tf_min"] = combined["Timeframe"].apply(lambda x: scanner.tf_minutes(x))
+            combined = combined.sort_values(
+                ["_ticker_min", "Ticker", "_abs_dist", "_tf_min"],
+                ascending=[True, True, True, True]
+            )
+            combined = combined.drop(columns=["_abs_dist", "_ticker_min", "_tf_min"])
+        elif "Distance %" in combined.columns:
             combined = combined.sort_values("Distance %", key=lambda s: s.abs())
 
 render_table(combined, "all_selected_timeframes" if len(tf_selected) > 1 else tf_selected[0])
@@ -450,7 +466,9 @@ with st.expander("ℹ️ Methodology / Limitations"):
     st.markdown("""
 - **Data source**: Yahoo Finance.
 - **NSE F&O Breadth**: All 213 NSE F&O stocks ka daily close vs previous close se Up/Down count nikala jata hai (0.05% se jyada change ko Up/Down mana jata hai). Ye badge Total Zones ke saath dikhta hai.
-- **Symbol Sorting**: Table ke upar sorting radio se aap Symbol A-Z, Z-A ya Grouped (same symbol ke saare TF ek saath) kar sakte hain. Ye sirf display order hai, scan logic same hai.
+- **Symbol Sorting (NEW)**: 
+  - **Distance % (Default - Nearest First + Same Stock Grouped)**: Sabse nearest zone wala stock pehle, uske saare TF zones ek saath (15m,30m,1H...), phir second nearest stock ke saare zones, aise क्रम me. Aapke screenshot ke requirement ke hisab se.
+  - **Symbol A-Z / Z-A / Grouped A-Z**: Sirf display order hai, scan logic same hai.
 - **Low TF (3m/5m/10m)**: 1m data se bante hain, toggle se enable hote hain.
 - **Universe Type**: NSE F&O ya Global - exclusive selection.
 - **Universe default All**: NSE mode me by default All selected.
