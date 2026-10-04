@@ -53,7 +53,6 @@ with settings_pop:
     for _raw in (raw_tf_selected or []):
         _norm = scanner.normalize_tf(_raw)
         if _norm:
-            # Agar low TF disabled hai to ignore karo
             if not enable_low_tf and _norm in low_tfs:
                 invalid_tfs.append(f"{_raw} (low TF disabled - checkbox enable karo)")
                 continue
@@ -69,18 +68,16 @@ with settings_pop:
     tf_selected = sorted(tf_selected, key=scanner.tf_minutes)
 
     st.markdown("---")
-    st.subheader("🌍 Universe Type (Requirement 3)")
+    st.subheader("🌍 Universe Type")
 
-    # ---- NEW: Exclusive selection NSE vs Global (Requirement 3) ----
     scan_mode = st.radio(
         "Kis universe ko scan karna hai? (ek hi select hoga)",
         ["📊 NSE F&O Universe", "🌍 Top Global Instruments"],
         index=0,
         horizontal=True,
-        help="Pehle dono add hote the. Ab aapko ek chunna hai - ya to NSE F&O stocks ya to Global Instruments (Gold, Crude, DXY, Indices etc)."
+        help="Pehle dono add hote the. Ab aapko ek chunna hai - ya to NSE F&O stocks ya to Global Instruments."
     )
 
-    # ---- Universe size: single clean slider instead of tier chips ----
     @st.cache_data(show_spinner=False, ttl=24 * 3600)
     def cached_universe():
         return get_fno_symbols(try_live=True)
@@ -89,7 +86,6 @@ with settings_pop:
     all_tickers = to_yahoo_tickers(symbols)
     total_n = len(all_tickers)
 
-    # Default tickers will be set based on scan_mode
     tickers = ()
     universe_label = None
     global_labels_selected = []
@@ -97,27 +93,24 @@ with settings_pop:
     if scan_mode == "📊 NSE F&O Universe":
         _size_options = sorted({n for n in [25, 50, 75, 100, 150, 200, total_n] if n <= total_n})
         _size_labels = [f"All ({total_n})" if n == total_n else f"Top {n}" for n in _size_options]
-        # ---- Requirement 2: by default All selected ----
         _default_label = f"All ({total_n})" if f"All ({total_n})" in _size_labels else _size_labels[-1]
 
         universe_label = st.select_slider(
             "Universe (Market-Cap size)", options=_size_labels, value=_default_label,
-            help="Market cap (capital size) ke hisaab se top-N NSE F&O stocks scan honge. By default All selected hai, aap kam/jyada kar sakte hain.",
+            help="Market cap ke hisaab se top-N NSE F&O stocks scan honge. By default All selected hai.",
         )
         _n_selected = total_n if universe_label.startswith("All") else int(universe_label.replace("Top ", ""))
         tickers = list(mc.top_n_tickers(all_tickers, _n_selected))
         st.caption(f"{len(tickers)} tickers selected ({universe_source}) - Mode: NSE F&O")
         tickers = tuple(tickers)
 
-    else:  # Global mode
+    else:
         st.info("🌍 Global Mode: Sirf selected global instruments scan honge, NSE F&O nahi.")
         global_labels_selected = st.multiselect(
             "🌍 Top Global Instruments (select karo)", 
             gi.labels(), 
             default=gi.labels()[:8] if len(gi.labels()) >= 8 else gi.labels(),
-            help="NSE ke bajaye sirf ye global instruments scan honge "
-                 "(DXY, USDINR, Gold, Crude, world indices, GIFT/Nifty futures proxy, etc). "
-                 "Data quality/availability Yahoo Finance par depend karti hai.",
+            help="NSE ke bajaye sirf ye global instruments scan honge.",
         )
         global_tickers = [gi.label_to_yahoo(lbl) for lbl in global_labels_selected]
         global_tickers = [t for t in global_tickers if t]
@@ -135,7 +128,6 @@ with settings_pop:
                                      label_visibility="collapsed")
     hq_only = st.checkbox("⭐ HQ zones only (Rule3)", value=False)
 
-    # ---- Everything else: tucked away, clean & small ----
     with st.expander("📐 EOD Range Filter", expanded=False):
         eod_advanced = st.checkbox("Advanced: alag High/Low %", value=False)
         if eod_advanced:
@@ -157,12 +149,11 @@ with settings_pop:
         force_rescan = st.button("🔄 Force Rescan (bypass cache)", width="stretch")
         st.caption(
             "Scan sirf tab dobara chalta hai jab us timeframe ki candle actually "
-            "CLOSE hoti hai (NSE session + holidays aware) - bade timeframes par load nahi badhta. "
-            "Low TF (3m/5m/10m) enable hai to 1m data fetch hoga jo thoda heavy hai."
+            "CLOSE hoti hai (NSE session + holidays aware)."
         )
 
 # -----------------------------------------------------------------------------
-# Cached raw data fetchers - keyed to each dataset's OWN candle-close bucket.
+# Cached raw data fetchers
 # -----------------------------------------------------------------------------
 @st.cache_data(show_spinner=False, ttl=6 * 3600)
 def cached_fetch_1m(bucket_key, tick_tuple):
@@ -278,6 +269,37 @@ def cached_nifty_daily(bucket_key):
     return raw.get("^NSEI")
 
 
+# ---- NEW: Breadth calculation for NSE F&O 213 ----
+@st.cache_data(show_spinner=False, ttl=300)
+def cached_breadth_for_all(bucket_key, tick_tuple):
+    """Daily data se up/down breadth nikalta hai - 213 stocks ke liye"""
+    try:
+        raw = data_fetch.fetch_daily(list(tick_tuple))
+    except Exception:
+        return 0, 0, 0, []
+    up, down, flat = 0, 0, 0
+    details = []
+    for sym, df in raw.items():
+        if df is None or len(df) < 2:
+            continue
+        try:
+            prev = float(df["close"].iloc[-2])
+            curr = float(df["close"].iloc[-1])
+            if prev == 0:
+                continue
+            chg_pct = (curr - prev) / prev * 100.0
+            details.append((sym, chg_pct))
+            if chg_pct > 0.05:
+                up += 1
+            elif chg_pct < -0.05:
+                down += 1
+            else:
+                flat += 1
+        except Exception:
+            continue
+    return up, down, flat, details
+
+
 def render_table(df: pd.DataFrame, file_label: str):
     df = apply_display_filters(df)
 
@@ -287,6 +309,31 @@ def render_table(df: pd.DataFrame, file_label: str):
         badges.append(_badge("Demand", str(int(df["Direction"].str.contains("DEMAND").sum())), "#16c784"))
         badges.append(_badge("Supply", str(int(df["Direction"].str.contains("SUPPLY").sum())), "#ea3943"))
         badges.append(_badge("HQ (Rule3)", str(int(df["HQ Zone (Rule3 Boring-Colour)"].sum())), "#f0b90b"))
+
+    # ---- NEW Requirement 1: NSE F&O 213 me kitna up/down ----
+    # Ye badge usi line me ayega jahan Total/Demand/Supply/HQ hai - screenshot ke pehle circle wali jagah
+    if scan_mode == "📊 NSE F&O Universe":
+        try:
+            # Breadth hamesha All (213) ke liye dikhana hai, chahe user Top 50 select kare
+            breadth_tickers = tuple(all_tickers) if 'all_tickers' in globals() and len(all_tickers) > 0 else tickers
+            if len(breadth_tickers) > 0:
+                daily_bucket = cc.last_closed_bucket("Daily")
+                up, down, flat, _details = cached_breadth_for_all(daily_bucket, breadth_tickers)
+                total_b = up + down + flat
+                if total_b > 0:
+                    up_pct = up / total_b * 100
+                    down_pct = down / total_b * 100
+                    # Color logic: agar up jyada to green border, down jyada to red
+                    breadth_color = "#16c784" if up >= down else "#ea3943"
+                    breadth_value = (
+                        f"<span style='color:#16c784'>▲ Up: {up} ({up_pct:.1f}%)</span> "
+                        f"<span style='color:#ea3943'>▼ Down: {down} ({down_pct:.1f}%)</span> "
+                        f"<span style='color:#8b8b8b'>- Flat: {flat}</span>"
+                    )
+                    badges.append(_badge(f"NSE F&O Breadth ({total_b})", breadth_value, breadth_color))
+        except Exception as e:
+            # Fail silently, breadth optional hai
+            pass
 
     nifty_df = cached_nifty_daily(cc.last_closed_bucket("Daily"))
     nifty_zone = scanner.nearest_zone_for_symbol(nifty_df, params, states=["Fresh", "Tested"])
@@ -333,7 +380,7 @@ def render_table(df: pd.DataFrame, file_label: str):
 
 
 # -----------------------------------------------------------------------------
-# Main scan - staged status feedback
+# Main scan
 # -----------------------------------------------------------------------------
 if not tickers:
     st.error("❌ Koi ticker select nahi hai. Settings (⚙️) me jaake NSE Universe ya Global Instruments select karo.")
@@ -370,26 +417,41 @@ if len(tf_selected) > 1 and not combined.empty:
     if view_tfs:
         combined = combined[combined["Timeframe"].isin(view_tfs)]
 
+# ---- NEW Requirement 2: Symbol sorting / grouping (bina anya logic change ke) ----
+if not combined.empty:
+    st.markdown("#### 🔃 Table Sorting / Grouping (Display Only)")
+    sort_option = st.radio(
+        "Symbol ko kaise dikhana hai?",
+        ["Distance % (Default - Nearest First)", "Symbol A→Z ↑ (Ascending)", "Symbol Z→A ↓ (Descending)", "Symbol Grouped (ek Symbol ke saare TF ek saath)"],
+        index=0,
+        horizontal=True,
+        help="Ye sirf display order badlega, zone detection logic same rahega. Grouped me ek hi symbol ke saare timeframes ek saath dikhenge."
+    )
+
+    # Sorting logic - sirf display ke liye, koi filter/scan logic change nahi
+    if sort_option == "Symbol A→Z ↑ (Ascending)":
+        combined = combined.sort_values("Ticker", ascending=True)
+    elif sort_option == "Symbol Z→A ↓ (Descending)":
+        combined = combined.sort_values("Ticker", ascending=False)
+    elif "Grouped" in sort_option:
+        # Symbol wise group + uske andar TF chhote se bade
+        combined["_tf_min"] = combined["Timeframe"].apply(lambda x: scanner.tf_minutes(x))
+        combined = combined.sort_values(["Ticker", "_tf_min"], ascending=[True, True])
+        combined = combined.drop(columns=["_tf_min"])
+    else:
+        # Default: Distance % abs ke hisab se nearest first
+        if "Distance %" in combined.columns:
+            combined = combined.sort_values("Distance %", key=lambda s: s.abs())
+
 render_table(combined, "all_selected_timeframes" if len(tf_selected) > 1 else tf_selected[0])
 
 st.markdown("---")
 with st.expander("ℹ️ Methodology / Limitations"):
     st.markdown("""
-- **Data source**: Yahoo Finance (`yfinance`, with a Chrome-impersonating `curl_cffi` session and
-  fast-fail timeouts to avoid hanging on cloud hosting where Yahoo can throttle requests).
-  15m/5m/15m/1m are Yahoo's own native intraday granularities.
-- **NEW Low TF (3m/5m/10m)**: 3m = 1m data ko 3-candle group karke, 5m = native 5m, 10m = 5m x2 group. 
-  Ye enable karne par hi dikhenge (⚙️ Settings > Enable Low Timeframes). Thoda heavy hai kyunki 1m data 7 din ka hi milta hai Yahoo se.
-- **Custom timeframes** (e.g. '3m', '45m', '3H', '8H') are built by grouping native
-  1m/5m/15m/60m bars **per trading day starting at 09:15 IST** - the exact same session-aware
-  logic used for the built-in 30m/75m/2H/4H/6H presets.
-- **Universe Type**: Ab aapko chunna hai - **NSE F&O Universe** YA **Top Global Instruments**. Pehle dono add hote the, ab exclusive hai taaki confusion na ho.
-- **Universe default All**: NSE mode me by default `All (213)` selected hai, aap slider se Top 25/50/100 etc kar sakte hain.
-- **All selected timeframes are always scanned together** - results from every selected timeframe
-  are shown in ONE combined table.
-- **Market Watch ticker-tape** (top of page) shows live price + %change for 6 key instruments.
-- **Refresh-on-candle-close**: every timeframe's scan is cached against a session-aware "candle
-  bucket" key (NSE holidays included).
-- **F&O universe list**: fetched live from `nseindia.com` when possible, falls back to a bundled
-  snapshot automatically when NSE blocks the request.
+- **Data source**: Yahoo Finance.
+- **NSE F&O Breadth**: All 213 NSE F&O stocks ka daily close vs previous close se Up/Down count nikala jata hai (0.05% se jyada change ko Up/Down mana jata hai). Ye badge Total Zones ke saath dikhta hai.
+- **Symbol Sorting**: Table ke upar sorting radio se aap Symbol A-Z, Z-A ya Grouped (same symbol ke saare TF ek saath) kar sakte hain. Ye sirf display order hai, scan logic same hai.
+- **Low TF (3m/5m/10m)**: 1m data se bante hain, toggle se enable hote hain.
+- **Universe Type**: NSE F&O ya Global - exclusive selection.
+- **Universe default All**: NSE mode me by default All selected.
     """)
