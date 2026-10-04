@@ -8,8 +8,17 @@ Pine se EKMAAT ANTAR:
 
 Baaki SAB kuch Pine jaisa: inputs, leg-in/base/leg-out rules, imbalance,
 engulf check, classification, scoring (densityScore/minValidScore/HQ),
-duplicate check, zone levels (SL/TP/legOutMidLevel) aur state machine
-(Fresh -> Tested -> Broken, legOutMidLevel ke aadhar par).
+duplicate check, zone levels (SL/TP/legOutMidLevel) aur state machine.
+
+*** NEW RULE (User Requirement - Tested zone सुधार) ***
+    Pehle: Fresh -> Tested tab hota tha jab price legOutMidLevel ko touch karta tha.
+    Ab:    Fresh -> Tested tab hoga jab price PROXIMAL LINE (proxVal) ko
+           reversal ke dauran chhuyega. Jab tak proximal touch nahi hota,
+           zone Fresh hi rahega.
+           
+           Tested -> Broken sirf tab hoga jab DISTAL LINE (distVal) toot jayega.
+           Matlab Tested zone tab tak Tested hi rahega jab tak distal break na ho.
+           (maxTestedCount wala auto-break ab nahi hoga - user requirement ke hisab se)
 
 Note: Pine ke "PARITY INPUTS" (closing-wick, coverage, HQ-colour, white-area,
 boring %, body mult, scan-once flags, scanAfterCandleComplete) Pine me bhi
@@ -21,13 +30,6 @@ Compatibility fix:
     checks do not run; isHQ stays score-based. Standalone legacy helpers remain
     importable but are not called by scan_zones / ZoneEngine.
     Timestamp conversion supports naive and timezone-aware DatetimeIndex.
-
-Scope:
-    A batch scan evaluates the supplied OHLCV rows. It does not reproduce
-    TradingView realtime tick rollback or fetch candles from TradingView.
-    EOD grouping uses all supplied rows for each date; on intraday historical
-    data this can include later candles of the same day. Use for EOD scanning,
-    not as a guarantee of lookahead-free intraday backtesting.
 """
 from __future__ import annotations
 
@@ -88,7 +90,7 @@ PINE_DEFAULTS: Dict[str, Any] = {
     # ---- SCANNER-ONLY (Pine se ekmaatra antar) ----
     "eodHighBufferPct": 10.0,
     "eodLowBufferPct": 10.0,
-    "useEodRange": True,   # False = EOD filter band => bilkul Pine
+    "useEodRange": True,
 }
 
 HARD_MAX_BASE_COUNT = 3
@@ -137,8 +139,8 @@ class Zone:
     legOutTR: float
     zoneBox: Box
     timestamp: object = None
-    riskPct: float = float("nan")      # risk as % of price
-    score10: float = 0.0               # densityScore / 10 (display convenience)
+    riskPct: float = float("nan")
+    score10: float = 0.0
     hasGenuineGap: bool = False
     gapToLegIn: float = 0.0
     legInVolX: float = float("nan")
@@ -147,10 +149,6 @@ class Zone:
     entryTimestamp: object = None
     breakBarIndex: Optional[int] = None
 
-    # Backward-compatible fields expected by the original scanner.py / app.py.
-    # Retired non-Pine rules are NOT run. Neutral values mean not evaluated,
-    # not a successful validation or a measured win probability.
-    # Keep these real dataclass fields (not __getattr__) for asdict/serialization.
     baseColourOK: bool = False
     retestVolX: float = float("nan")
     entryStatus: str = ""
@@ -173,7 +171,6 @@ def _positive_float(value: Any, name: str) -> float:
     return r
 
 
-# Backward-compatible helpers; no role in accepting/rejecting a zone.
 def get_eod_range(df: pd.DataFrame, idx: int, high_buffer_pct: float = 10.0,
                   low_buffer_pct: float = 10.0) -> tuple[float, float]:
     try:
@@ -189,7 +186,6 @@ def get_eod_range(df: pd.DataFrame, idx: int, high_buffer_pct: float = 10.0,
 
 def check_white_area(df: pd.DataFrame, base_start_idx: int, base_end_idx: int,
                      leg_out_idx: int, curr_idx: int) -> bool:
-    """Display-only: no intervening wick/body touched the base range."""
     bh = float(df["high"].iloc[base_start_idx:base_end_idx + 1].max())
     bl = float(df["low"].iloc[base_start_idx:base_end_idx + 1].min())
     if leg_out_idx + 1 >= curr_idx:
@@ -200,7 +196,6 @@ def check_white_area(df: pd.DataFrame, base_start_idx: int, base_end_idx: int,
 
 def check_leg_out_coverage(df: pd.DataFrame, leg_out_idx: int, curr_idx: int,
                            max_cover_pct: float = 90.0) -> bool:
-    """Standalone legacy helper; coverage is NOT a Pine validity guard."""
     hi, lo = float(df["high"].iloc[leg_out_idx]), float(df["low"].iloc[leg_out_idx])
     rng = hi - lo
     if rng <= 0 or leg_out_idx + 1 > curr_idx:
@@ -212,7 +207,6 @@ def check_leg_out_coverage(df: pd.DataFrame, leg_out_idx: int, curr_idx: int,
 SCAN_TRACKER: Dict[str, datetime] = {}
 
 def should_scan_now(tf: str, force: bool = False) -> bool:
-    """Legacy scheduling utility; scan_zones never calls it (like Pine)."""
     now = datetime.now()
     if force:
         return True
@@ -245,18 +239,14 @@ class ZoneEngine:
         self.v = self.df["volume"].to_numpy(float)
         self.n = len(self.df)
         self.dow = self.df.index.dayofweek.to_numpy()
-        # Pandas 2+ rejects astype(datetime64[ns]) on timezone-aware indexes.
-        # Normalize the timestamp representation to UTC without altering the
-        # original index used for local day-of-week and EOD date grouping.
         time_index = self.df.index
         if time_index.tz is not None:
             time_index = time_index.tz_convert("UTC").tz_localize(None)
         self.time_ms = time_index.astype("datetime64[ns]").astype(np.int64) // 10**6
         self.active_zones: List[Zone] = []
-        self.live_zones: List[Zone] = []   # non-Broken zones (Pine me Broken skip hote hain)
+        self.live_zones: List[Zone] = []
         self._prepare()
 
-    # ---------------- indicators (Pine: true_range, ta.rma, ta.sma) ----------
     def _rma(self, s: np.ndarray, length: int) -> np.ndarray:
         r = np.full(len(s), np.nan)
         if len(s) < length:
@@ -274,12 +264,10 @@ class ZoneEngine:
             tr[1:] = np.maximum(tr[1:], np.maximum(np.abs(self.h[1:] - pc), np.abs(self.l[1:] - pc)))
         self.atr = self._rma(tr, self.atrPeriod)
         self.vol_sma = self.df["volume"].rolling(self.volSmaPeriod).mean().to_numpy()
-        # EOD range (scanner-only): per-day High/Low, vectorised
         day_key = self.df.index.normalize()
         self.day_high = self.df["high"].groupby(day_key).transform("max").to_numpy()
         self.day_low = self.df["low"].groupby(day_key).transform("min").to_numpy()
 
-    # ---------------- candle helpers (Pine: tr(idx), body_pct ...) -----------
     def _tr(self, p: int) -> float:
         pc = self.c[p - 1]
         return max(self.h[p] - self.l[p], abs(self.h[p] - pc), abs(self.l[p] - pc))
@@ -308,20 +296,18 @@ class ZoneEngine:
             return False
         return bool(self.dow[i] != self.dow[i - 1] or (self.time_ms[i] - self.time_ms[i - 1]) > 86400000)
 
-    # ---------------- 4. SCANNING ENGINE ------------------------------------
     def _scan_bar(self, i: int) -> None:
         atr_now = self.atr[i]
         found = False
         for bc in range(self.minBaseCount, self.maxBaseCount + 1):
             if found:
                 break
-            li = bc + 1          # leg-in offset
-            pi = li + 1          # prev offset
+            li = bc + 1
+            pi = li + 1
             p_in, p_prev, p_out = i - li, i - pi, i
             if p_prev < 0 or np.isnan(self.atr[p_in]):
                 continue
 
-            # ---- LEG-IN ----
             leg_in_tr = self._tr(p_in)
             in_low, in_high, in_close = self.l[p_in], self.h[p_in], self.c[p_in]
             in_vol = self.v[p_in]
@@ -339,7 +325,6 @@ class ZoneEngine:
             bull_clv = (in_close - in_low) / in_rng
             bear_clv = (in_high - in_close) / in_rng
 
-            # ---- BASE ----
             ok = True
             max_base_tr = 0.0
             max_base_high = -1.0
@@ -365,7 +350,6 @@ class ZoneEngine:
             if not (leg_in_tr >= self.legInMinAtrMult * self.atr[p_in]):
                 continue
 
-            # ---- LEG-OUT ----
             leg_out_tr = self._tr(p_out)
             out_high, out_low = self.h[p_out], self.l[p_out]
             out_close, out_open = self.c[p_out], self.o[p_out]
@@ -381,7 +365,6 @@ class ZoneEngine:
             vol_ok = out_vol > in_vol
             is_overnight = self._overnight(i)
 
-            # ---- IMBALANCE & GAP ----
             has_imb = True
             has_gap = False
             gap_size = 0.0
@@ -395,12 +378,10 @@ class ZoneEngine:
                     has_imb = has_gap or (out_close < in_low)
                     gap_size = max(0.0, min_base_low - out_high)
 
-            # ---- ENGULF CHECK ----
             if (min(out_open, out_close) <= min_base_low and max(out_open, out_close) >= max_base_high
                     and not has_gap):
                 continue
 
-            # ---- CLASSIFICATION ----
             is_rbr = in_bull and bull_clv >= self.minClvPct and is_demand
             is_dbr = in_bear and bear_clv >= self.minClvPct and is_demand
             is_dbd = in_bear and bear_clv >= self.minClvPct and is_supply
@@ -409,7 +390,6 @@ class ZoneEngine:
                     and tr_hier and vol_ok and has_imb):
                 continue
 
-            # ---- SCORING ----
             score = 0
             if bc == 1:
                 score += 15
@@ -419,7 +399,7 @@ class ZoneEngine:
                 score += 15
             if leg_in_tr >= 2.0 * max_base_tr and leg_out_tr >= 2.0 * leg_in_tr:
                 score += 15
-            if out_vol > self.vol_sma[p_out]:      # NaN => False (Pine na => false)
+            if out_vol > self.vol_sma[p_out]:
                 score += 10
             out_rng = out_high - out_low
             if is_demand:
@@ -451,20 +431,17 @@ class ZoneEngine:
             if score < self.minValidScore:
                 continue
 
-            # ---- ZONE LEVELS ----
             prox = max_base_high if is_demand else min_base_low
             dist = min_base_low if is_demand else max_base_high
 
-            # ===== SCANNER-ONLY: EOD RANGE FILTER (Pine se ekmaatra antar) =====
             if self.useEodRange:
                 eod_high = self.day_high[i] * (1 + self.eodHighBufferPct / 100.0)
                 eod_low = self.day_low[i] * (1 - self.eodLowBufferPct / 100.0)
                 if not (eod_low <= prox <= eod_high):
                     continue
-            # ====================================================================
 
             is_hq = score >= self.hqScoreThreshold
-            found = True     # Pine: score pass hote hi set (duplicate se pehle)
+            found = True
 
             sl = dist - self.slBufferAtr * atr_now if is_demand else dist + self.slBufferAtr * atr_now
             risk = abs(prox - sl)
@@ -474,7 +451,6 @@ class ZoneEngine:
             else:
                 mid = out_low + self.testedLegOutRetracePct * (out_high - out_low)
 
-            # ---- DUPLICATE CHECK (Broken skip, max 11 non-broken) ----
             dup = False
             checked = 0
             for z in reversed(self.live_zones):
@@ -509,43 +485,76 @@ class ZoneEngine:
             self.active_zones.append(z)
             self.live_zones.append(z)
 
-    # ---------------- 5. STATE TRACKING (Pine jaisa, legOutMidLevel) --------
+    # ---------------- 5. STATE TRACKING - NEW RULE -------------------------
+    # OLD RULE (Pine jaisa):
+    #   Fresh -> Tested jab price legOutMidLevel touch kare
+    #   Tested -> Broken jab touchCount > maxTestedCount ya distal toote
+    #
+    # NEW RULE (User requirement):
+    #   Fresh tab tak Fresh rahega jab tak proximal line (proxVal) price
+    #   reversal ke dauran touch na ho.
+    #   Fresh -> Tested jab price proxVal ko chhuye
+    #   Tested tab tak Tested rahega jab tak distal (distVal) na toote
+    #   (maxTestedCount wala break hataya gaya hai, taaki Tested distal
+    #   break tak bana rahe - agar chaho to neeche wala block uncomment kar sakte ho)
+    # -----------------------------------------------------------------------
     def _update_states(self, i: int) -> None:
         if not self.live_zones:
             return
         lo, hi = self.l[i], self.h[i]
         for k in range(len(self.live_zones) - 1, -1, -1):
             z = self.live_zones[k]
+
             if z.state == "Fresh":
                 if z.isDemand:
+                    # Demand: price neeche aata hai
                     if lo <= z.distVal:
+                        # Distal toot gaya -> direct Broken (proximal touch hue bina bhi)
                         z.state = "Broken"
-                    elif lo <= z.legOutMidLevel:
+                        z.breakReason = "distal_break_before_test"
+                    elif lo <= z.proxVal:
+                        # Proximal touch hua reversal me -> ab Tested
                         z.state = "Tested"
                         z.touchCount += 1
+                        if z.entryBarIndex is None:
+                            z.entryBarIndex = i
+                            z.entryTimestamp = self.df.index[i]
                 else:
+                    # Supply: price upar jata hai
                     if hi >= z.distVal:
                         z.state = "Broken"
-                    elif hi >= z.legOutMidLevel:
+                        z.breakReason = "distal_break_before_test"
+                    elif hi >= z.proxVal:
                         z.state = "Tested"
                         z.touchCount += 1
-                if z.state == "Tested" and z.entryBarIndex is None:
-                    z.entryBarIndex = i
-                    z.entryTimestamp = self.df.index[i]
+                        if z.entryBarIndex is None:
+                            z.entryBarIndex = i
+                            z.entryTimestamp = self.df.index[i]
+
             elif z.state == "Tested":
                 if z.isDemand:
                     if lo <= z.distVal:
+                        # Distal break -> Broken
                         z.state = "Broken"
-                    elif lo <= z.legOutMidLevel:
+                        z.breakReason = "distal_break"
+                    elif lo <= z.proxVal:
+                        # Proximal ko dubara touch -> touch count badhao, par Tested hi rahega
                         z.touchCount += 1
                 else:
                     if hi >= z.distVal:
                         z.state = "Broken"
-                    elif hi >= z.legOutMidLevel:
+                        z.breakReason = "distal_break"
+                    elif hi >= z.proxVal:
                         z.touchCount += 1
 
-            if z.state == "Tested" and z.touchCount > self.maxTestedCount:
-                z.state = "Broken"
+            # --- OLD LOGIC: maxTestedCount se break (ab requirement ke hisab se hataya) ---
+            # User ne kaha: "jab tak distal nahi toot jata tab tak Tested maane"
+            # Isliye ye check ab nahi karna. Agar aapko purana behaviour chahiye
+            # to neeche ke 2 lines uncomment kar do.
+            #
+            # if z.state == "Tested" and z.touchCount > self.maxTestedCount:
+            #     z.state = "Broken"
+            #     z.breakReason = "max_tested_count"
 
             if z.state == "Broken":
                 z.breakBarIndex = i
@@ -560,13 +569,10 @@ class ZoneEngine:
         for i in range(self.n):
             if i >= min_bar and not np.isnan(self.atr[i]):
                 self._scan_bar(i)
-            self._update_states(i)   # Pine: scan ke turant baad, usi bar par
+            self._update_states(i)
         return self.active_zones
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 def settings(accountCapital: Optional[float] = None, **overrides: Any) -> Dict[str, Any]:
     result = dict(PINE_DEFAULTS)
     if accountCapital is not None:
@@ -592,5 +598,4 @@ def latest_active_zones(zones: List[Zone]) -> List[Zone]:
 
 
 def high_quality_zones(zones: List[Zone]) -> List[Zone]:
-    """Pine jaisa HQ: densityScore >= hqScoreThreshold."""
     return [z for z in zones if z.isHQ]
