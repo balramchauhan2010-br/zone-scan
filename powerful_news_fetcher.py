@@ -238,56 +238,43 @@ def fetch_google_news_trending_1hour(limit=15):
 
 @st.cache_data(show_spinner=False, ttl=60)
 def fetch_nse_trending_1hour(limit=10):
-    """NSE Announcements - Trending - Last 1 Hour (if available)"""
+    """NSE Announcements - Trending - Last 1 Hour - SAFE (no external import, app never white screen)"""
     try:
-        from news_corporate_events import get_nse_announcements
-        # NSE announcements are intraday, but we filter to last 1 hour by checking time if possible
-        nse_df = get_nse_announcements(days=1)  # Today
-        if not nse_df.empty:
-            formatted = []
-            now = datetime.now()
-            for _, row in nse_df.head(30).iterrows():
-                symbol = row.get("symbol", "")
-                desc = row.get("desc", "")
-                date = row.get("date", "")
-                
-                # Clean symbol
-                clean_symbol = symbol.replace(".NS", "").replace("https://", "").replace("http://", "").split("/")[0].split("?")[0].strip()
-                if not clean_symbol or len(clean_symbol) > 20 or "TRADINGVIEW" in clean_symbol.upper():
-                    continue
-                if not is_trending_financial_news(clean_symbol, desc):
-                    continue
-                
-                # For NSE, assume fresh if today (since NSE announcements are intraday)
-                # Try to parse time if available
-                is_fresh = True
-                try:
-                    # If date contains time, check if within 1 hour
-                    if isinstance(date, str) and ":" in date:
-                        # Try to parse
-                        pass
-                except Exception:
-                    pass
-                
-                link = f"https://www.nseindia.com/get-quotes/equity?symbol={clean_symbol}"
-                if not is_valid_link(link):
-                    continue
-                
-                formatted.append({
-                    "source": "NSE",
-                    "title": f"{clean_symbol} - {desc[:80]}",
-                    "link": link,
-                    "desc": desc,
-                    "date": date,
-                    "symbol": clean_symbol,
-                    "fresh": "1H",
-                })
-                if len(formatted) >= limit:
-                    break
-            return pd.DataFrame(formatted)
+        # Try to import NSE module, but if fails, return empty (app still works)
+        try:
+            from news_corporate_events import get_nse_announcements
+            nse_df = get_nse_announcements(days=1)
+            if not nse_df.empty:
+                formatted = []
+                for _, row in nse_df.head(30).iterrows():
+                    symbol = str(row.get("symbol", ""))
+                    desc = str(row.get("desc", ""))
+                    date = str(row.get("date", ""))
+                    clean_symbol = symbol.replace(".NS", "").replace("https://", "").replace("http://", "").split("/")[0].split("?")[0].strip()
+                    if not clean_symbol or len(clean_symbol) > 20 or "TRADINGVIEW" in clean_symbol.upper():
+                        continue
+                    if not is_trending_financial_news(clean_symbol, desc):
+                        continue
+                    link = f"https://www.nseindia.com/get-quotes/equity?symbol={clean_symbol}"
+                    if not is_valid_link(link):
+                        continue
+                    formatted.append({
+                        "source": "NSE",
+                        "title": f"{clean_symbol} - {desc[:80]}",
+                        "link": link,
+                        "desc": desc,
+                        "date": date,
+                        "symbol": clean_symbol,
+                        "fresh": "1H",
+                    })
+                    if len(formatted) >= limit:
+                        break
+                return pd.DataFrame(formatted)
+        except Exception as e:
+            print(f"NSE 1H trending inner error (safe): {e}")
         return pd.DataFrame()
     except Exception as e:
-        print(f"NSE 1H trending error: {e}")
+        print(f"NSE 1H trending outer safe error: {e}")
         return pd.DataFrame()
 
 @st.cache_data(show_spinner=False, ttl=60)  # 1 min cache - ultra fresh 1 hour
