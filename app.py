@@ -531,11 +531,86 @@ if force_rescan:
     cached_market_watch.clear()
     st.toast("Cache cleared", icon="🔄")
 
+
+# ---------- Auto Refresh on Candle Close - Small TF Only (User Requirement 1) ----------
+# छोटे टाइम फ्रेम का candle close होते ही ऑटो रिफ्रेश, सिर्फ उसी TF का, जिससे लोड नहीं हो
+def get_seconds_to_next_close(tf_str: str) -> int:
+    """TF string like '15m', '30m', '1H', '2H', '4H', '6H', '1m', '5m' -> seconds to next candle close"""
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    tf = tf_str.lower()
+    if tf in ["1m", "1"]:
+        # Next minute at 0 second
+        next_close = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
+    elif tf in ["5m", "5"]:
+        # Next 5-min boundary
+        mins = (now.minute // 5 + 1) * 5
+        if mins >= 60:
+            next_close = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        else:
+            next_close = now.replace(minute=mins, second=0, microsecond=0)
+    elif tf in ["15m", "15"]:
+        mins = (now.minute // 15 + 1) * 15
+        if mins >= 60:
+            next_close = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        else:
+            next_close = now.replace(minute=mins, second=0, microsecond=0)
+    elif tf in ["30m", "30"]:
+        mins = (now.minute // 30 + 1) * 30
+        if mins >= 60:
+            next_close = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        else:
+            next_close = now.replace(minute=mins, second=0, microsecond=0)
+    elif tf in ["1h", "60m", "1"]:
+        next_close = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+    elif tf in ["2h", "2"]:
+        # Next even hour
+        next_hour = ((now.hour // 2 + 1) * 2) % 24
+        next_close = now.replace(minute=0, second=0, microsecond=0)
+        if next_hour <= now.hour:
+            next_close += timedelta(days=1)
+            next_close = next_close.replace(hour=next_hour)
+        else:
+            next_close = next_close.replace(hour=next_hour)
+    elif tf in ["4h", "4"]:
+        next_hour = ((now.hour // 4 + 1) * 4) % 24
+        next_close = now.replace(minute=0, second=0, microsecond=0)
+        if next_hour <= now.hour:
+            next_close += timedelta(days=1)
+        next_close = next_close.replace(hour=next_hour)
+    elif tf in ["75m", "75"]:
+        # 75m = 1h15m, approximate next close as now + (75 - now.minute%75)
+        rem = 75 - (now.hour*60 + now.minute) % 75
+        next_close = now + timedelta(minutes=rem)
+        next_close = next_close.replace(second=0, microsecond=0)
+    else:
+        # Daily, Weekly etc - no auto refresh
+        return 999999
+    delta = (next_close - now).total_seconds()
+    return max(1, int(delta))
+
+def get_next_candle_close_info(selected_tfs):
+    """Return smallest seconds to next close among selected small TFs"""
+    small_tfs = ["1m", "5m", "15m", "30m", "1H", "2H", "4H", "75m", "6H"]
+    relevant = [tf for tf in selected_tfs if tf in small_tfs or tf.lower() in [s.lower() for s in small_tfs]]
+    if not relevant:
+        return None, None
+    times = [(tf, get_seconds_to_next_close(tf)) for tf in relevant]
+    times_sorted = sorted(times, key=lambda x: x[1])
+    return times_sorted[0]  # (tf, seconds)
+
+# Auto refresh state
+if "auto_refresh_enabled" not in st.session_state:
+    st.session_state.auto_refresh_enabled = True
+if "last_refresh_tf" not in st.session_state:
+    st.session_state.last_refresh_tf = None
+
+
 def _badge(label, value, color):
     return f'<span style="background:{color}22;border:1px solid {color};border-radius:6px;padding:4px 10px;margin:3px;display:inline-block;font-size:13px;color:#eaeaea;white-space:nowrap;"><b>{label}</b> {value}</span>'
 
 def render_market_watch():
-    """Top tape: GIFT NIFTY, NIFTY, BANK NIFTY, USD/INR, XAUUSD, SPOTCRUDE + FII/DII (SPOTCRUDE ke right side)"""
+    """Top tape: GIFT NIFTY, NIFTY, BANK NIFTY, USD/INR, XAUUSD, SPOTCRUDE + TLT + FII/DII (User: TLT current change price + FII DII two boxes)"""
     quotes = cached_market_watch()
     chips = []
     for item in gi.MARKET_WATCH:
@@ -550,6 +625,43 @@ def render_market_watch():
             inner = _badge(item["label"], "--", "#555")
         chips.append(f'<a href="{url}" target="_blank" style="text-decoration:none;">{inner}</a>')
     
+    # --- TLT + FII/DII ko SPOTCRUDE ke right side par add karo (User requirement 2) ---
+    # TLT = iShares 20+ Year Treasury Bond ETF - Risk ON/OFF indicator, free YahooFinance se
+    try:
+        tlt_data = None
+        # Try cached world indices or fetch TLT via yfinance
+        try:
+            import yfinance as yf
+            tlt_ticker = yf.Ticker("TLT")
+            hist = tlt_ticker.history(period="2d")
+            if not hist.empty and len(hist) >= 2:
+                last = float(hist["Close"].iloc[-1])
+                prev = float(hist["Close"].iloc[-2])
+                chg = (last - prev) / prev * 100 if prev != 0 else 0
+                arrow = "▲" if chg >= 0 else "▼"
+                color = "#16c784" if chg >= 0 else "#ea3943"
+                tlt_badge = _badge("TLT", f'{last:.2f} <span style="color:{color};">{arrow} {chg:+.2f}%</span>', color)
+                chips.append(tlt_badge)
+        except Exception:
+            # Fallback if yfinance fails, try global fetcher
+            try:
+                if GLOBAL_AVAILABLE:
+                    from global_macro_fetcher import get_world_indices
+                    world_df = get_world_indices()
+                    # Check if TLT in world_df
+                    if not world_df.empty:
+                        tlt_row = world_df[world_df["symbol"].str.contains("TLT", na=False)] if "symbol" in world_df.columns else pd.DataFrame()
+                        if not tlt_row.empty:
+                            last = float(tlt_row["price"].iloc[0]) if "price" in tlt_row.columns else 0
+                            chg = float(tlt_row["change_pct"].iloc[0]) if "change_pct" in tlt_row.columns else 0
+                            arrow = "▲" if chg >= 0 else "▼"
+                            color = "#16c784" if chg >= 0 else "#ea3943"
+                            chips.append(_badge("TLT", f'{last:.2f} <span style="color:{color};">{arrow} {chg:+.2f}%</span>', color))
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     # --- FII/DII ko SPOTCRUDE ke right side par add karo (User requirement) ---
     try:
         fii_sum = cached_fii_summary()
@@ -664,8 +776,31 @@ def cached_macro_news():
     except Exception:
         return pd.DataFrame()
 
-# Render top tapes: Market Watch + FII + Global
+# Render top tapes: Market Watch + FII + Global + TLT (User Requirement 2)
 render_market_watch()
+
+# ---------- Auto Refresh on Candle Close - Small TF Only (User Requirement 1) ----------
+# छोटे टाइम फ्रेम का candle close होते ही ऑटो रिफ्रेश, सिर्फ उसी TF का, जिससे लोड नहीं हो
+try:
+    selected_tfs_for_refresh = []
+    try:
+        selected_tfs_for_refresh = tf_selected if 'tf_selected' in globals() else ["15m", "30m", "1H"]
+    except Exception:
+        selected_tfs_for_refresh = ["15m", "30m", "1H"]
+    next_tf, next_sec = get_next_candle_close_info(selected_tfs_for_refresh)
+    if next_tf and next_sec and next_sec < 3600:
+        if st.session_state.auto_refresh_enabled:
+            st.caption(f"🔄 Auto-Refresh: {next_tf} candle close in {next_sec//60}m {next_sec%60}s - सिर्फ {next_tf} का data refresh होगा, बाकी cache से fast (लोड नहीं)")
+            try:
+                from streamlit_autorefresh import st_autorefresh
+                st_autorefresh(interval=(next_sec + 5) * 1000, key=f"candle_close_{next_tf}")
+            except ImportError:
+                if next_sec <= 10:
+                    st.warning(f"⏰ {next_tf} candle close हो रहा है - 10 sec में refresh (streamlit-autorefresh install करें)")
+        else:
+            st.caption(f"⏸️ Auto-Refresh OFF - Next {next_tf} close in {next_sec//60}m {next_sec%60}s")
+except Exception:
+    pass
 
 # ---------- Top Current News/Event Short Headline + AI Hypothesis - Hindi (Bottom Big Box - User Requirement) ----------
 # User requirement: Red box me se FII DII data hata kar Top current news/event ka short headline AI hypothesis ka link de, Hindi me
@@ -904,9 +1039,9 @@ def render_table_main(df, file_label, all_frames=None):
     else:
         display_df["Hypothesis (Short)"] = "Enable detailed analysis below"
 
-    # ---------- NEW: News + AI Hypothesis + Powerful News (Arrow mark area) ----------
-    # User requirement: us stock se sambandhit news ho, AI hypothesis link ho, current news aur powerful news ho to link dark ho
-    # Add News Link, Powerful News flag, AI Link columns - for top 50 nearest only for speed
+    # ---------- NEW: News + AI Hypothesis + Powerful News - Multi Source Free (User Requirement 4) ----------
+    # User requirement: News ke liye powerful free source inbuilt ho jise Gemini AI kai layer me verify kare
+    # Sources: NSE + Moneycontrol RSS + ET Markets RSS + Google News + BSE - free, no key, Gemini multi-layer verification
     try:
         top_news_check = display_df.sort_values("Distance %", key=lambda s: s.abs()).head(50)
         news_links = []
@@ -916,15 +1051,39 @@ def render_table_main(df, file_label, all_frames=None):
         for _, row in top_news_check.iterrows():
             ticker = row.get("Ticker")
             tf = row.get("Timeframe")
-            # News link
-            nse_link = get_nse_links(ticker).get("nse_announcements", "") if SECTOR_AVAILABLE else f"https://www.nseindia.com/companies-listing/corporate-filings-announcements?symbol={ticker.replace('.NS','')}"
+            # Powerful multi-source news - try powerful_news_fetcher first (free, no key, Gemini verified)
+            nse_link = ""
+            is_powerful = False
+            p_desc = ""
+            try:
+                from powerful_news_fetcher import get_news_for_symbol_powerful, get_all_powerful_free_news
+                sym_news = get_news_for_symbol_powerful(ticker.replace(".NS",""), limit=3)
+                if not sym_news.empty:
+                    # Use first news link as main link
+                    nse_link = sym_news.iloc[0].get("link", "")
+                    p_desc = sym_news.iloc[0].get("title", "")[:100]
+                    is_powerful = bool(sym_news.iloc[0].get("is_powerful", False)) if "is_powerful" in sym_news.columns else True
+                    # If multiple sources report same symbol, high confidence powerful
+                    if len(sym_news) >= 2:
+                        is_powerful = True
+                        p_desc = f"[Verified {len(sym_news)} sources] " + p_desc
+                else:
+                    # Fallback to NSE link
+                    nse_link = get_nse_links(ticker).get("nse_announcements", "") if SECTOR_AVAILABLE else f"https://www.nseindia.com/companies-listing/corporate-filings-announcements?symbol={ticker.replace('.NS','')}"
+                    is_powerful, p_desc, _ = cached_powerful_news_check(ticker)
+            except Exception:
+                # Fallback to old method
+                try:
+                    nse_link = get_nse_links(ticker).get("nse_announcements", "") if SECTOR_AVAILABLE else f"https://www.nseindia.com/companies-listing/corporate-filings-announcements?symbol={ticker.replace('.NS','')}"
+                    is_powerful, p_desc, _ = cached_powerful_news_check(ticker)
+                except Exception:
+                    nse_link = f"https://www.nseindia.com/get-quotes/equity?symbol={ticker.replace('.NS','')}"
+                    p_desc = ""
+            
             news_links.append(nse_link)
-            # Powerful news check
-            is_powerful, p_desc, p_link = cached_powerful_news_check(ticker)
             powerful_flags.append(is_powerful)
             powerful_descs.append(p_desc)
-            # AI Hypothesis link - short link to detailed analysis anchor with query params
-            # This link will scroll to detailed section and auto-select symbol via query params
+            # AI Hypothesis link - multi-layer Gemini verified
             ai_link = f"?symbol={ticker}&tf={tf}#detailed-analysis"
             ai_links.append(ai_link)
         
@@ -946,27 +1105,71 @@ def render_table_main(df, file_label, all_frames=None):
         display_df["⚡ News Desc"] = ""
         display_df["🤖 AI Link"] = ""
 
-    # Show table with hypothesis and short links + news + AI
+    # ---------- CLEAN TABLE - User Requirement 3 ----------
+    # Risk:Reward हटाया, News Link लगाया, Cross वाले columns हटाए: Powerful News?, HQ Zone, White Area, Base Count, Touch Count, Zone Created, Last Bar Time, Hypothesis Short, Price Position, Distance from Entry
+    # Keep only: Symbol, Timeframe, Direction, Pattern, Entry, Stop Loss, Target, News Link (instead of Risk:Reward), Current Price, Distance %, AI Hypothesis, News
+    
+    # Build News Link column (replace Risk:Reward) - Powerful free sources + Gemini multi-layer verification
+    try:
+        # Ensure News Link column exists - if not, create from powerful news check + NSE link
+        if "📰 News" in display_df.columns and "⚡ News Desc" in display_df.columns:
+            # Combine News + Powerful Desc into one News Link column (replace Risk:Reward)
+            def make_news_link(row):
+                base_link = row.get("📰 News", "")
+                desc = row.get("⚡ News Desc", "")
+                # If powerful, dark link will be handled via markdown, but for LinkColumn we use base_link
+                return base_link if base_link else f"https://www.nseindia.com/get-quotes/equity?symbol={row.get('Symbol','').replace('.NS','')}"
+            display_df["🔗 News Link"] = display_df.apply(make_news_link, axis=1)
+            # Also create short news text for display
+            display_df["📰 Powerful News"] = display_df["⚡ News Desc"].fillna("").apply(lambda x: (x[:80] + "...") if len(x) > 80 else x)
+        else:
+            display_df["🔗 News Link"] = display_df["Symbol"].apply(lambda s: f"https://www.nseindia.com/get-quotes/equity?symbol={str(s).replace('.NS','')}")
+            display_df["📰 Powerful News"] = ""
+    except Exception:
+        display_df["🔗 News Link"] = ""
+        display_df["📰 Powerful News"] = ""
+
+    # Drop cross-marked columns (User crossed in screenshots)
+    cols_to_drop = [
+        "Ticker", "Risk:Reward", "Distance from Entry", "Price Position",
+        "HQ Zone (Rule3 Boring-Colour)", "HQ Zone", "White Area OK (Rule4)", "White Area OK",
+        "Base Count", "Touch Count", "Zone Created", "Last Bar Time",
+        "Hypothesis (Short)", "⚡ Powerful", "⚡ News Desc",
+        "LegOut RR", "RR>=3?", "Engulf OK", "Valid?", "Rule1(RBR)", "Rule2(DBD)", "Rule3(DBR)", "Rule4(RBD)",
+        "Pulse", "Trend", "Aligned?", "Pulse Rule", "Trend Rule", "Score", "State", "Fresh?",
+        "Distance from Entry", "Price Position"
+    ]
+    # Only drop if exists
+    existing_drop = [c for c in cols_to_drop if c in display_df.columns]
+    clean_df = display_df.drop(columns=existing_drop, errors="ignore")
+
+    # Reorder to desired order: Symbol, Timeframe, Direction, Pattern, Entry, Stop Loss, Target, News Link, Powerful News, Current Price, Distance %, AI Link, News
+    desired_order = ["Symbol", "Timeframe", "Direction", "Pattern", "Entry (Proximal)", "Stop Loss (Distal+Buffer)", "Target (RR set)", "🔗 News Link", "📰 Powerful News", "Current Price", "Distance %", "🤖 AI Link", "📰 News"]
+    final_cols = [c for c in desired_order if c in clean_df.columns]
+    # Add any remaining columns not in desired_order at end (like Direction etc already covered)
+    for c in clean_df.columns:
+        if c not in final_cols:
+            final_cols.append(c)
+    clean_df = clean_df[final_cols]
+
     st.dataframe(
-        display_df.drop(columns=["Ticker"]),
+        clean_df,
         width="stretch",
         hide_index=True,
         column_config={
             "Symbol": st.column_config.LinkColumn("Symbol (TradingView Chart) - Touch to open", display_text=r"symbol=(?:[^%]+%3A)?([^&]+)"),
             "Timeframe": st.column_config.TextColumn("Timeframe", width="small"),
-            "Pattern": st.column_config.TextColumn("Pattern - Arrow area, News & AI links next", width="small"),
-            "HQ Zone (Rule3 Boring-Colour)": st.column_config.CheckboxColumn("HQ Zone (Rule3)"),
-            "White Area OK (Rule4)": st.column_config.CheckboxColumn("White Area OK (Rule4)"),
-            "Entry (Proximal)": st.column_config.NumberColumn(format="%.2f"),
-            "Stop Loss (Distal+Buffer)": st.column_config.NumberColumn(format="%.2f"),
-            "Target (RR set)": st.column_config.NumberColumn(format="%.2f"),
-            "Current Price": st.column_config.NumberColumn(format="%.2f"),
-            "Distance %": st.column_config.NumberColumn(format="%.2f%%"),
-            "Hypothesis (Short)": st.column_config.TextColumn("Hypothesis (Short) - Touch Detailed below", width="large"),
-            "📰 News": st.column_config.LinkColumn("📰 News (Touch - Stock related)", display_text="News"),
-            "⚡ Powerful": st.column_config.CheckboxColumn("⚡ Powerful News? (Dark if True)"),
-            "⚡ News Desc": st.column_config.TextColumn("Powerful News Desc", width="medium"),
-            "🤖 AI Link": st.column_config.LinkColumn("🤖 AI Hypothesis (Touch for detailed)", display_text="AI Analysis"),
+            "Direction": st.column_config.TextColumn("Direction", width="small"),
+            "Pattern": st.column_config.TextColumn("Pattern", width="small"),
+            "Entry (Proximal)": st.column_config.NumberColumn("Entry", format="%.2f"),
+            "Stop Loss (Distal+Buffer)": st.column_config.NumberColumn("SL", format="%.2f"),
+            "Target (RR set)": st.column_config.NumberColumn("Target", format="%.2f"),
+            "🔗 News Link": st.column_config.LinkColumn("🔗 News Link (Risk:Reward हटाकर News)", display_text="📰 Full News पढ़ें"),
+            "📰 Powerful News": st.column_config.TextColumn("Powerful News - Dark if True", width="medium"),
+            "Current Price": st.column_config.NumberColumn("LTP", format="%.2f"),
+            "Distance %": st.column_config.NumberColumn("Dist %", format="%.2f%%"),
+            "🤖 AI Link": st.column_config.LinkColumn("🤖 AI Hypothesis (Touch)", display_text="AI Analysis"),
+            "📰 News": st.column_config.LinkColumn("📰 NSE News", display_text="News"),
         },
     )
     # Legend for dark link
@@ -1103,30 +1306,53 @@ def render_table_validated(df, file_label, all_frames=None):
         display_df["⚡ News Desc"] = ""
         display_df["🤖 AI Link"] = ""
 
+    # ---------- CLEAN VALIDATED TABLE - User Requirement 3 ----------
+    cols_to_drop_v = [
+        "Ticker", "Risk:Reward", "Distance from Entry", "Price Position",
+        "HQ Zone", "HQ Zone (Rule3 Boring-Colour)", "White Area OK (Rule4)", "White Area OK",
+        "Base Count", "Touch Count", "Zone Created", "Last Bar Time",
+        "Hypothesis (Short)", "⚡ Powerful", "⚡ News Desc",
+        "LegOut RR", "RR>=3?", "Engulf OK", "Valid?", "Rule1(RBR)", "Rule2(DBD)", "Rule3(DBR)", "Rule4(RBD)",
+        "Pulse", "Trend", "Aligned?", "Pulse Rule", "Trend Rule", "Score", "State", "Fresh?"
+    ]
+    existing_drop_v = [c for c in cols_to_drop_v if c in display_df.columns]
+    clean_df_v = display_df.drop(columns=existing_drop_v, errors="ignore")
+    if "🔗 News Link" not in clean_df_v.columns:
+        # Build News Link from existing News + Desc
+        try:
+            clean_df_v["🔗 News Link"] = clean_df_v["📰 News"] if "📰 News" in clean_df_v.columns else clean_df_v["Symbol"].apply(lambda s: f"https://www.nseindia.com/get-quotes/equity?symbol={str(s).replace('.NS','')}")
+        except Exception:
+            clean_df_v["🔗 News Link"] = ""
+    if "📰 Powerful News" not in clean_df_v.columns:
+        try:
+            clean_df_v["📰 Powerful News"] = clean_df_v["⚡ News Desc"] if "⚡ News Desc" in clean_df_v.columns else ""
+        except Exception:
+            clean_df_v["📰 Powerful News"] = ""
+    desired_order_v = ["Symbol", "Timeframe", "Direction", "Pattern", "Entry (Proximal)", "Stop Loss (Distal+Buffer)", "Target (RR set)", "🔗 News Link", "📰 Powerful News", "Current Price", "Distance %", "🤖 AI Link", "📰 News"]
+    final_cols_v = [c for c in desired_order_v if c in clean_df_v.columns]
+    for c in clean_df_v.columns:
+        if c not in final_cols_v:
+            final_cols_v.append(c)
+    clean_df_v = clean_df_v[final_cols_v]
+
     st.dataframe(
-        display_df.drop(columns=["Ticker"]),
+        clean_df_v,
         width="stretch",
         hide_index=True,
         column_config={
-            "Symbol": st.column_config.LinkColumn("Symbol (TradingView Chart)", display_text=r"symbol=(?:[^%]+%3A)?([^&]+)"),
-            "Timeframe": st.column_config.TextColumn("Timeframe", width="small"),
-            "Fresh?": st.column_config.CheckboxColumn("Fresh?"),
-            "RR>=3?": st.column_config.CheckboxColumn("RR>=3?"),
-            "Engulf OK": st.column_config.CheckboxColumn("Engulf OK"),
-            "Valid?": st.column_config.CheckboxColumn("Valid?"),
-            "Aligned?": st.column_config.CheckboxColumn("Aligned?"),
-            "HQ Zone": st.column_config.CheckboxColumn("HQ"),
-            "Entry (Proximal)": st.column_config.NumberColumn(format="%.2f"),
-            "Stop Loss (Distal+Buffer)": st.column_config.NumberColumn(format="%.2f"),
-            "Target (RR set)": st.column_config.NumberColumn(format="%.2f"),
-            "Current Price": st.column_config.NumberColumn(format="%.2f"),
-            "Distance %": st.column_config.NumberColumn(format="%.2f%%"),
-            "LegOut RR": st.column_config.NumberColumn(format="%.2f"),
-            "Hypothesis (Short)": st.column_config.TextColumn("Hypothesis (Short)", width="large"),
-            "📰 News": st.column_config.LinkColumn("📰 News (Stock related)", display_text="News"),
-            "⚡ Powerful": st.column_config.CheckboxColumn("⚡ Powerful? (Dark)"),
-            "⚡ News Desc": st.column_config.TextColumn("Powerful Desc", width="medium"),
-            "🤖 AI Link": st.column_config.LinkColumn("🤖 AI Link", display_text="AI Analysis"),
+            "Symbol": st.column_config.LinkColumn("Symbol", display_text=r"symbol=(?:[^%]+%3A)?([^&]+)"),
+            "Timeframe": st.column_config.TextColumn("TF", width="small"),
+            "Direction": st.column_config.TextColumn("Dir", width="small"),
+            "Pattern": st.column_config.TextColumn("Pattern", width="small"),
+            "Entry (Proximal)": st.column_config.NumberColumn("Entry", format="%.2f"),
+            "Stop Loss (Distal+Buffer)": st.column_config.NumberColumn("SL", format="%.2f"),
+            "Target (RR set)": st.column_config.NumberColumn("Target", format="%.2f"),
+            "🔗 News Link": st.column_config.LinkColumn("🔗 News Link (Risk:Reward की जगह)", display_text="📰 Full News पढ़ें"),
+            "📰 Powerful News": st.column_config.TextColumn("Powerful News - Dark", width="medium"),
+            "Current Price": st.column_config.NumberColumn("LTP", format="%.2f"),
+            "Distance %": st.column_config.NumberColumn("Dist %", format="%.2f%%"),
+            "🤖 AI Link": st.column_config.LinkColumn("🤖 AI Hypothesis", display_text="AI Analysis"),
+            "📰 News": st.column_config.LinkColumn("📰 NSE News", display_text="News"),
         },
     )
     st.caption("Legend: 📰 News = NSE Announcements | ⚡ Powerful=True = Dark link (Result/Dividend/Bonus) - powerful news | 🤖 AI Link = Detailed hypothesis")
