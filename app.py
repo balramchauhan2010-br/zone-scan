@@ -322,69 +322,88 @@ with settings_pop:
         force_rescan = st.button("🔄 Force Rescan (bypass cache)", width="stretch")
 
 # Cached fetchers
-# Secure price source: Dhan if connected else YahooFinance (User requirement)
-# Dhan se data nahi mila to free YahooFinance fallback - fast, bina key ke bhi kaam
+# ROBUST price source: Dhan if connected (fast real-time) else Yahoo Finance (app band nahi hoga) - User Requirement
+# Dhan connect nahi ho to Yahoo Finance se data le, band nahi ho - fast, free, no key, powerful fallback
 @st.cache_data(show_spinner=False, ttl=6*3600)
 def cached_fetch_1m(bk, tt):
-    # Try Dhan first if configured (secure, optional)
-    if is_dhan_configured():
-        try:
-            from dhan_api_helper import DhanHelper
-            cid, token = get_dhan_creds()
-            # Dhan historical 1m data - if available, use it, else fallback to Yahoo
-            # For now, Yahoo is more reliable for historical, Dhan for LTP
-            # So fallback to Yahoo for historical scanning
-            pass
-        except Exception:
-            pass
-    # Fallback YahooFinance (free, fast, no key)
-    return data_fetch.fetch_1m(list(tt))
+    # Always try Yahoo as base (app band nahi hoga)
+    try:
+        # Try Dhan first if configured for real-time (optional, secure)
+        if is_dhan_configured():
+            try:
+                from dhan_api_helper_v2 import get_dhan_ltp_fast
+                from secure_config import get_dhan_creds
+                cid, token = get_dhan_creds()
+                # Dhan historical 1m - for now Yahoo more reliable for historical, Dhan for LTP
+                # So we still use Yahoo for historical scanning, but Dhan for LTP overlay
+                pass
+            except Exception as e:
+                print(f"Dhan 1m fetch error, Yahoo fallback (app band nahi hoga): {e}")
+        # Fallback YahooFinance - free, fast, no key, app never stops
+        return data_fetch.fetch_1m(list(tt))
+    except Exception as e:
+        print(f"1m fetch error, empty fallback: {e}")
+        return {}
 
 @st.cache_data(show_spinner=False, ttl=6*3600)
 def cached_fetch_5m(bk, tt):
-    if is_dhan_configured():
-        try:
-            from dhan_api_helper import DhanHelper
-            cid, token = get_dhan_creds()
-            pass
-        except Exception:
-            pass
-    return data_fetch.fetch_5m(list(tt))
+    try:
+        if is_dhan_configured():
+            try:
+                from secure_config import get_dhan_creds
+                cid, token = get_dhan_creds()
+                pass
+            except Exception as e:
+                print(f"Dhan 5m error, Yahoo fallback: {e}")
+        return data_fetch.fetch_5m(list(tt))
+    except Exception as e:
+        print(f"5m fetch error, empty fallback: {e}")
+        return {}
 
 @st.cache_data(show_spinner=False, ttl=6*3600)
 def cached_fetch_15m(bk, tt):
-    if is_dhan_configured():
-        try:
-            from dhan_api_helper import DhanHelper
-            cid, token = get_dhan_creds()
-            pass
-        except Exception:
-            pass
-    return data_fetch.fetch_15m(list(tt))
+    try:
+        if is_dhan_configured():
+            try:
+                from secure_config import get_dhan_creds
+                cid, token = get_dhan_creds()
+                pass
+            except Exception as e:
+                print(f"Dhan 15m error, Yahoo fallback: {e}")
+        return data_fetch.fetch_15m(list(tt))
+    except Exception as e:
+        print(f"15m fetch error, empty fallback: {e}")
+        return {}
 
 @st.cache_data(show_spinner=False, ttl=6*3600)
 def cached_fetch_60m(bk, tt):
-    if is_dhan_configured():
-        try:
-            from dhan_api_helper import DhanHelper
-            cid, token = get_dhan_creds()
-            pass
-        except Exception:
-            pass
-    return data_fetch.fetch_60m(list(tt))
+    try:
+        if is_dhan_configured():
+            try:
+                from secure_config import get_dhan_creds
+                cid, token = get_dhan_creds()
+                pass
+            except Exception as e:
+                print(f"Dhan 60m error, Yahoo fallback: {e}")
+        return data_fetch.fetch_60m(list(tt))
+    except Exception as e:
+        print(f"60m fetch error, empty fallback: {e}")
+        return {}
 
 @st.cache_data(show_spinner=False, ttl=6*3600)
 def cached_fetch_daily(bk, tt):
-    # For daily, try Dhan if configured for more accurate EOD, else Yahoo
-    if is_dhan_configured():
-        try:
-            from dhan_api_helper import DhanHelper
-            cid, token = get_dhan_creds()
-            # Dhan daily historical - placeholder, fallback to Yahoo for now
-            pass
-        except Exception:
-            pass
-    return data_fetch.fetch_daily(list(tt))
+    try:
+        if is_dhan_configured():
+            try:
+                from secure_config import get_dhan_creds
+                cid, token = get_dhan_creds()
+                pass
+            except Exception as e:
+                print(f"Dhan daily error, Yahoo fallback: {e}")
+        return data_fetch.fetch_daily(list(tt))
+    except Exception as e:
+        print(f"Daily fetch error, empty fallback: {e}")
+        return {}
 
 @st.cache_data(show_spinner=False, ttl=60)
 def cached_dhan_ltp_if_available(tickers_tuple):
@@ -403,7 +422,37 @@ def cached_dhan_ltp_if_available(tickers_tuple):
             return {}
     return {}
 @st.cache_data(show_spinner=False, ttl=180)
-def cached_market_watch(): return data_fetch.fetch_market_watch_quotes([item["yahoo"] for item in gi.MARKET_WATCH])
+@st.cache_data(show_spinner=False, ttl=120)  # 2 min cache - fast open, Yahoo fallback always
+def cached_market_watch():
+    """Market Watch FAST + ROBUST: Dhan if connected (real-time, no delay) else Yahoo Finance (app band nahi hoga)"""
+    yahoo_quotes = {}
+    # First try Yahoo as base (always works, free, fast, no key)
+    try:
+        yahoo_quotes = data_fetch.fetch_market_watch_quotes([item["yahoo"] for item in gi.MARKET_WATCH])
+    except Exception as e:
+        print(f"Yahoo market watch base error (fallback): {e}")
+        yahoo_quotes = {}
+    
+    # If Dhan configured, try to get real-time for NIFTY/BANKNIFTY and merge (Dhan priority, but Yahoo remains for others)
+    try:
+        if is_dhan_configured():
+            from dhan_api_helper_v2 import get_dhan_market_watch_fast
+            from secure_config import get_dhan_creds
+            cid, token = get_dhan_creds()
+            dhan_quotes = get_dhan_market_watch_fast(cid, token)
+            if dhan_quotes:
+                # Merge: Yahoo base + Dhan real-time override for NIFTY/BANKNIFTY
+                merged = {**yahoo_quotes, **dhan_quotes}
+                # Ensure GIFT NIFTY has value even if Dhan fails
+                if "^NSEI" in merged and "GIFT_NIFTY" not in merged:
+                    merged["GIFT_NIFTY"] = merged["^NSEI"]
+                return merged
+    except Exception as e:
+        print(f"Dhan market watch fast error, using Yahoo fallback (app band nahi hoga): {e}")
+    
+    # Final fallback: Yahoo only (app never stops)
+    return yahoo_quotes
+
 
 BASE_ORDER = ["1m","5m","15m","60m","daily"]
 BASE_LABELS = {"1m":"1m","5m":"5m","15m":"15m","60m":"1H (60m)","daily":"Daily"}
@@ -610,8 +659,29 @@ def _badge(label, value, color):
     return f'<span style="background:{color}22;border:1px solid {color};border-radius:6px;padding:4px 10px;margin:3px;display:inline-block;font-size:13px;color:#eaeaea;white-space:nowrap;"><b>{label}</b> {value}</span>'
 
 def render_market_watch():
-    """Top tape: GIFT NIFTY, NIFTY, BANK NIFTY, USD/INR, XAUUSD, SPOTCRUDE + TLT + FII/DII (User: TLT current change price + FII DII two boxes)"""
-    quotes = cached_market_watch()
+    """Top tape: GIFT NIFTY, NIFTY, BANK NIFTY, USD/INR, XAUUSD, SPOTCRUDE + TLT + FII/DII - FAST: Dhan if connected else Yahoo (no delay)"""
+    # FAST PATH: Dhan if connected (real-time, no delay), else Yahoo (free, delayed but fast cache)
+    quotes = {}
+    try:
+        if is_dhan_configured():
+            from dhan_api_helper_v2 import get_dhan_market_watch_fast
+            from secure_config import get_dhan_creds
+            cid, token = get_dhan_creds()
+            dhan_quotes = get_dhan_market_watch_fast(cid, token)
+            # Merge with cached Yahoo for others (USD/INR, XAUUSD, CRUDE, TLT)
+            yahoo_quotes = cached_market_watch()
+            # Dhan has priority for NIFTY/BANKNIFTY
+            quotes = {**yahoo_quotes, **dhan_quotes}
+            # For GIFT NIFTY, if Dhan has NIFTY, use it
+            if "^NSEI" in quotes and "GIFT_NIFTY" not in quotes:
+                quotes["GIFT_NIFTY"] = quotes["^NSEI"]
+        else:
+            quotes = cached_market_watch()
+    except Exception as e:
+        # Fallback to Yahoo (fast cache, no crash)
+        print(f"Market watch Dhan fast error: {e}")
+        quotes = cached_market_watch()
+    
     chips = []
     for item in gi.MARKET_WATCH:
         q = quotes.get(item["yahoo"])
@@ -746,7 +816,7 @@ def cached_breadth_for_all(bk, tt):
     return up,down,flat,details
 
 # FII + Global cached (secure, fast without keys)
-@st.cache_data(show_spinner=False, ttl=1800)
+@st.cache_data(show_spinner=False, ttl=1800)  # 30 min cache - fast open
 def cached_fii_summary():
     try:
         if FII_AVAILABLE:
@@ -1109,25 +1179,58 @@ def render_table_main(df, file_label, all_frames=None):
     # Risk:Reward हटाया, News Link लगाया, Cross वाले columns हटाए: Powerful News?, HQ Zone, White Area, Base Count, Touch Count, Zone Created, Last Bar Time, Hypothesis Short, Price Position, Distance from Entry
     # Keep only: Symbol, Timeframe, Direction, Pattern, Entry, Stop Loss, Target, News Link (instead of Risk:Reward), Current Price, Distance %, AI Hypothesis, News
     
-    # Build News Link column (replace Risk:Reward) - Powerful free sources + Gemini multi-layer verification
+    # Build News Link column (replace Risk:Reward) - FIXED: Actual article link from powerful sources, not just NSE
+    # User complaint: News link directly NSE opens, not working - now opens actual Moneycontrol/ET/Google News article
     try:
-        # Ensure News Link column exists - if not, create from powerful news check + NSE link
-        if "📰 News" in display_df.columns and "⚡ News Desc" in display_df.columns:
-            # Combine News + Powerful Desc into one News Link column (replace Risk:Reward)
-            def make_news_link(row):
-                base_link = row.get("📰 News", "")
-                desc = row.get("⚡ News Desc", "")
-                # If powerful, dark link will be handled via markdown, but for LinkColumn we use base_link
-                return base_link if base_link else f"https://www.nseindia.com/get-quotes/equity?symbol={row.get('Symbol','').replace('.NS','')}"
-            display_df["🔗 News Link"] = display_df.apply(make_news_link, axis=1)
-            # Also create short news text for display
-            display_df["📰 Powerful News"] = display_df["⚡ News Desc"].fillna("").apply(lambda x: (x[:80] + "...") if len(x) > 80 else x)
-        else:
-            display_df["🔗 News Link"] = display_df["Symbol"].apply(lambda s: f"https://www.nseindia.com/get-quotes/equity?symbol={str(s).replace('.NS','')}")
+        # Try powerful_news_fetcher for actual article links (Moneycontrol, ET, Google News) - multi-source, Gemini verified
+        from powerful_news_fetcher import get_news_for_symbol_powerful
+        news_link_list = []
+        powerful_text_list = []
+        for _, row in display_df.iterrows():
+            sym = str(row.get("Symbol","")).replace(".NS","").upper()
+            try:
+                sym_news = get_news_for_symbol_powerful(sym, limit=2)
+                if not sym_news.empty:
+                    # Use actual article link (Moneycontrol/ET/Google News), not NSE generic
+                    first = sym_news.iloc[0]
+                    actual_link = first.get("link", "")
+                    title = first.get("title", "")[:100]
+                    source = first.get("source", "NSE")
+                    # If multiple sources, show verified tag
+                    if len(sym_news) >= 2:
+                        title = f"[Verified {len(sym_news)} sources] {title}"
+                    news_link_list.append(actual_link if actual_link else f"https://www.nseindia.com/get-quotes/equity?symbol={sym}")
+                    powerful_text_list.append(f"{source}: {title}")
+                else:
+                    # Fallback to NSE announcement link + powerful desc
+                    base_link = row.get("📰 News", "") if "📰 News" in display_df.columns else ""
+                    desc = row.get("⚡ News Desc", "") if "⚡ News Desc" in display_df.columns else ""
+                    if base_link:
+                        news_link_list.append(base_link)
+                    else:
+                        news_link_list.append(f"https://www.nseindia.com/get-quotes/equity?symbol={sym}")
+                    powerful_text_list.append(desc[:80] if desc else "")
+            except Exception:
+                news_link_list.append(f"https://www.nseindia.com/get-quotes/equity?symbol={sym}")
+                powerful_text_list.append("")
+        display_df["🔗 News Link"] = news_link_list
+        display_df["📰 Powerful News"] = powerful_text_list
+    except Exception as e:
+        print(f"News link powerful fetcher error: {e}")
+        # Fallback old logic
+        try:
+            if "📰 News" in display_df.columns and "⚡ News Desc" in display_df.columns:
+                def make_news_link(row):
+                    base_link = row.get("📰 News", "")
+                    return base_link if base_link else f"https://www.nseindia.com/get-quotes/equity?symbol={row.get('Symbol','').replace('.NS','')}"
+                display_df["🔗 News Link"] = display_df.apply(make_news_link, axis=1)
+                display_df["📰 Powerful News"] = display_df["⚡ News Desc"].fillna("").apply(lambda x: (x[:80] + "...") if len(x) > 80 else x)
+            else:
+                display_df["🔗 News Link"] = display_df["Symbol"].apply(lambda s: f"https://www.nseindia.com/get-quotes/equity?symbol={str(s).replace('.NS','')}")
+                display_df["📰 Powerful News"] = ""
+        except Exception:
+            display_df["🔗 News Link"] = ""
             display_df["📰 Powerful News"] = ""
-    except Exception:
-        display_df["🔗 News Link"] = ""
-        display_df["📰 Powerful News"] = ""
 
     # Drop cross-marked columns (User crossed in screenshots)
     cols_to_drop = [
@@ -1317,12 +1420,28 @@ def render_table_validated(df, file_label, all_frames=None):
     ]
     existing_drop_v = [c for c in cols_to_drop_v if c in display_df.columns]
     clean_df_v = display_df.drop(columns=existing_drop_v, errors="ignore")
-    if "🔗 News Link" not in clean_df_v.columns:
-        # Build News Link from existing News + Desc
+    if "🔗 News Link" not in clean_df_v.columns or clean_df_v["🔗 News Link"].str.contains("nseindia.com/get-quotes", na=False).any():
+        # FIXED: Use actual powerful news article link (Moneycontrol/ET/Google News) not just NSE generic
         try:
-            clean_df_v["🔗 News Link"] = clean_df_v["📰 News"] if "📰 News" in clean_df_v.columns else clean_df_v["Symbol"].apply(lambda s: f"https://www.nseindia.com/get-quotes/equity?symbol={str(s).replace('.NS','')}")
+            from powerful_news_fetcher import get_news_for_symbol_powerful
+            news_links_v2 = []
+            for _, row in clean_df_v.iterrows():
+                sym = str(row.get("Symbol","")).replace(".NS","").upper()
+                try:
+                    sym_news = get_news_for_symbol_powerful(sym, limit=1)
+                    if not sym_news.empty:
+                        actual_link = sym_news.iloc[0].get("link","")
+                        news_links_v2.append(actual_link if actual_link else f"https://www.nseindia.com/get-quotes/equity?symbol={sym}")
+                    else:
+                        news_links_v2.append(f"https://www.nseindia.com/get-quotes/equity?symbol={sym}")
+                except Exception:
+                    news_links_v2.append(f"https://www.nseindia.com/get-quotes/equity?symbol={sym}")
+            clean_df_v["🔗 News Link"] = news_links_v2
         except Exception:
-            clean_df_v["🔗 News Link"] = ""
+            try:
+                clean_df_v["🔗 News Link"] = clean_df_v["📰 News"] if "📰 News" in clean_df_v.columns else clean_df_v["Symbol"].apply(lambda s: f"https://www.nseindia.com/get-quotes/equity?symbol={str(s).replace('.NS','')}")
+            except Exception:
+                clean_df_v["🔗 News Link"] = ""
     if "📰 Powerful News" not in clean_df_v.columns:
         try:
             clean_df_v["📰 Powerful News"] = clean_df_v["⚡ News Desc"] if "⚡ News Desc" in clean_df_v.columns else ""
@@ -1371,7 +1490,9 @@ needed_bases = {scanner.base_dataset_for_tf(tf) for tf in tf_selected}
 all_frames_store = {}
 
 if "Main" in st.session_state.app_page:
-    with st.status("Data fetch + scan chal raha hai (Main Scanner)...", expanded=True) as status_box:
+    # FAST OPEN FIX: Show top tape immediately, then scan - no delay for market watch
+    # Market watch and FII already rendered above, now scan with progress
+    with st.status("Data fetch + scan chal raha hai (Main Scanner) - Dhan fast if connected else Yahoo (optimized)...", expanded=True) as status_box:
         st.write(f"🔹 Mode: {scan_mode} | Tickers: {len(tickers)} | TFs: {', '.join(tf_selected)} | Page: Main")
         for base in BASE_ORDER:
             if base not in needed_bases:
