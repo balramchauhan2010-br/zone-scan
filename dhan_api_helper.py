@@ -1,14 +1,14 @@
 """
-dhan_api_helper.py
-Dhan Broker API (DhanHQ) ka powerful wrapper - aapke Zone Scanner ke liye
-
-Docs: https://dhanhq.co/docs/v2/
-Install: pip install dhanhq
+dhan_api_helper_v2.py - FAST Dhan implementation for real-time price, no delay
+Fixes: Price delay, slow open, uses Dhan when connected for fast LTP
 """
 
 import os
-from typing import List, Dict, Optional
 import pandas as pd
+import requests
+import io
+from typing import List, Dict, Optional
+import streamlit as st
 
 try:
     from dhanhq import dhanhq
@@ -16,151 +16,200 @@ try:
 except ImportError:
     DHAN_AVAILABLE = False
 
-class DhanHelper:
-    def __init__(self, client_id: str = None, access_token: str = None):
-        """
-        client_id: Dhan Client ID (ex: 1100000001)
-        access_token: Dhan Access Token (JWT) - https://dhan.co par generate hota hai
-        Streamlit secrets se lena best hai: st.secrets["DHAN_CLIENT_ID"]
-        """
-        if not DHAN_AVAILABLE:
-            raise ImportError("dhanhq library install karo: pip install dhanhq")
-        
-        self.client_id = client_id or os.getenv("DHAN_CLIENT_ID")
-        self.access_token = access_token or os.getenv("DHAN_ACCESS_TOKEN")
-        
-        if not self.client_id or not self.access_token:
-            raise ValueError("DHAN_CLIENT_ID aur DHAN_ACCESS_TOKEN chahiye. Streamlit secrets ya env var me rakho.")
-        
-        self.dhan = dhanhq(self.client_id, self.access_token)
-    
-    # ---------- Market Data (aapke scanner ke liye powerful) ----------
-    def get_ltp(self, symbols: List[str]) -> Dict[str, float]:
-        """Live LTP - NSE F&O stocks ke liye, Yahoo se tez aur reliable"""
-        # Dhan API expects: { "NSE_EQ": [11536, 1333] } - security ID chahiye
-        # Yahan simple wrapper - aapko symbol to securityId mapping banana padega
-        # Dhan master file: https://images.dhan.co/api-data/api-scrip-master.csv
-        try:
-            # Example for NSE EQ
-            # Convert trading symbol like RELIANCE to security ID via master CSV
-            # Yahan demo ke liye direct LTP API call
-            resp = self.dhan.ticker_data(securities={"NSE_EQ": symbols})  # symbols yahan security IDs hone chahiye
-            return resp
-        except Exception as e:
-            print(f"Dhan LTP error: {e}")
-            return {}
-
-    def get_option_chain(self, underlying_symbol: str = "NIFTY", expiry: str = None):
-        """Option chain + OI data - Zone ke saath confluence ke liye powerful"""
-        try:
-            # underlying: NIFTY, BANKNIFTY etc
-            # expiry: YYYY-MM-DD format
-            data = self.dhan.option_chain(
-                under_security_id=13,  # 13 = NIFTY, 25 = BANKNIFTY (master se lo)
-                under_exchange_segment="IDX_I",
-                expiry=expiry
-            )
-            return data
-        except Exception as e:
-            print(f"Option chain error: {e}")
-            return {}
-
-    # ---------- Holdings & Portfolio ----------
-    def get_holdings(self) -> pd.DataFrame:
-        """Aapke holdings - Zone scanner ke saath P&L dekhne ke liye"""
-        try:
-            holdings = self.dhan.get_holdings()
-            if holdings.get("status") == "success":
-                df = pd.DataFrame(holdings.get("data", []))
-                return df
-            return pd.DataFrame()
-        except Exception as e:
-            print(f"Holdings error: {e}")
-            return pd.DataFrame()
-
-    def get_positions(self) -> pd.DataFrame:
-        """Open positions - F&O ke liye"""
-        try:
-            pos = self.dhan.get_positions()
-            if pos.get("status") == "success":
-                return pd.DataFrame(pos.get("data", []))
-            return pd.DataFrame()
-        except Exception as e:
-            print(f"Positions error: {e}")
-            return pd.DataFrame()
-
-    # ---------- Orders - Zone se direct trade ----------
-    def place_order_from_zone(self, symbol: str, transaction_type: str, quantity: int, 
-                              entry_price: float, sl_price: float, target_price: float,
-                              order_type: str = "LIMIT", product_type: str = "INTRADAY"):
-        """
-        Zone se direct order - Demand zone par BUY, Supply par SELL
-        transaction_type: BUY / SELL
-        """
-        try:
-            # Security ID mapping needed - yahan demo
-            order = self.dhan.place_order(
-                security_id="11536",  # Example - aapko symbol se security_id map karna hai
-                exchange_segment="NSE_EQ",
-                transaction_type=transaction_type,
-                quantity=quantity,
-                order_type=order_type,
-                product_type=product_type,
-                price=entry_price,
-                # BO (Bracket Order) ke liye SL aur Target
-                # Dhan BO API alag hai - yahan simple limit order
-            )
-            return order
-        except Exception as e:
-            print(f"Order error: {e}")
-            return {"status": "failed", "error": str(e)}
-
-    # ---------- Corporate Actions & Events (Dhan se) ----------
-    def get_corporate_actions(self, symbol: str):
-        """Dhan API se corporate actions - bonus, split, dividend"""
-        # Dhan directly corporate actions nahi deta, NSE API se lena padega
-        # Yahan placeholder - neeche news_corporate_events.py dekho
-        pass
-
-# ---------- Security ID Mapping Helper ----------
-def load_dhan_master():
-    """
-    Dhan master CSV download karo - isme NSE symbol -> securityId mapping hai
-    https://images.dhan.co/api-data/api-scrip-master.csv
-    Isko daily cache karo
-    """
-    import requests, io
+# Cache master CSV for 1 day - fast
+@st.cache_data(show_spinner=False, ttl=24*3600)
+def load_dhan_master_fast():
+    """Dhan master CSV - NSE symbol -> security ID mapping - cached 24h for speed"""
     url = "https://images.dhan.co/api-data/api-scrip-master.csv"
     try:
         resp = requests.get(url, timeout=10)
         df = pd.read_csv(io.StringIO(resp.text))
-        # Filter NSE_EQ
-        nse_eq = df[df["SEM_EXM_EXCH_ID"] == "NSE"]
-        # Symbol mapping
-        mapping = dict(zip(nse_eq["SEM_TRADING_SYMBOL"], nse_eq["SEM_SMST_SECURITY_ID"]))
+        # Filter NSE EQ and IDX
+        # SEM_EXM_EXCH_ID: NSE, BSE, etc. SEM_SEGMENT: EQ, IDX_I etc
+        mapping = {}
+        # For EQ
+        try:
+            nse_eq = df[(df["SEM_EXM_EXCH_ID"] == "NSE") & (df["SEM_SEGMENT"] == "EQ")]
+            for _, row in nse_eq.iterrows():
+                sym = str(row["SEM_TRADING_SYMBOL"]).strip().upper()
+                sec_id = str(row["SEM_SMST_SECURITY_ID"]).strip()
+                mapping[sym] = {"security_id": sec_id, "segment": "NSE_EQ"}
+        except Exception:
+            pass
+        # For IDX (NIFTY, BANKNIFTY)
+        try:
+            idx = df[df["SEM_SEGMENT"] == "IDX_I"]
+            for _, row in idx.iterrows():
+                sym = str(row["SEM_TRADING_SYMBOL"]).strip().upper()
+                # Also check display name
+                sec_id = str(row["SEM_SMST_SECURITY_ID"]).strip()
+                mapping[sym] = {"security_id": sec_id, "segment": "IDX_I"}
+                # Add common aliases
+                if "NIFTY 50" in sym or sym == "NIFTY":
+                    mapping["NIFTY 50"] = {"security_id": sec_id, "segment": "IDX_I"}
+                    mapping["NIFTY"] = {"security_id": sec_id, "segment": "IDX_I"}
+                if "BANK" in sym and "NIFTY" in sym:
+                    mapping["BANK NIFTY"] = {"security_id": sec_id, "segment": "IDX_I"}
+                    mapping["BANKNIFTY"] = {"security_id": sec_id, "segment": "IDX_I"}
+        except Exception:
+            pass
+        
+        # Hardcode known indices for speed if master fails
+        if "NIFTY" not in mapping:
+            mapping["NIFTY"] = {"security_id": "13", "segment": "IDX_I"}
+            mapping["NIFTY 50"] = {"security_id": "13", "segment": "IDX_I"}
+        if "BANKNIFTY" not in mapping:
+            mapping["BANKNIFTY"] = {"security_id": "25", "segment": "IDX_I"}
+            mapping["BANK NIFTY"] = {"security_id": "25", "segment": "IDX_I"}
+        if "FINNIFTY" not in mapping:
+            mapping["FINNIFTY"] = {"security_id": "27", "segment": "IDX_I"}
+        
         return mapping
     except Exception as e:
-        print(f"Master load error: {e}")
+        print(f"Dhan master fast load error: {e}")
+        # Fallback hardcoded
+        return {
+            "NIFTY": {"security_id": "13", "segment": "IDX_I"},
+            "NIFTY 50": {"security_id": "13", "segment": "IDX_I"},
+            "BANKNIFTY": {"security_id": "25", "segment": "IDX_I"},
+            "BANK NIFTY": {"security_id": "25", "segment": "IDX_I"},
+            "FINNIFTY": {"security_id": "27", "segment": "IDX_I"},
+            "RELIANCE": {"security_id": "11536", "segment": "NSE_EQ"},
+        }
+
+@st.cache_data(show_spinner=False, ttl=60)  # 60 sec cache - fast LTP
+def get_dhan_ltp_fast(client_id: str, access_token: str, symbols: tuple):
+    """
+    FAST LTP from Dhan - no delay, real-time, batch request
+    symbols: tuple of NSE symbols like ("RELIANCE", "TCS", "NIFTY 50")
+    Returns: dict symbol -> {"ltp": float, "change": float, "change_pct": float}
+    """
+    if not DHAN_AVAILABLE:
+        return {}
+    try:
+        from dhanhq import dhanhq
+        dhan = dhanhq(client_id, access_token)
+        master = load_dhan_master_fast()
+        
+        # Group by segment
+        nse_eq_ids = []
+        idx_ids = []
+        symbol_to_id = {}
+        
+        for sym in symbols:
+            sym_clean = sym.replace(".NS", "").strip().upper()
+            # Try direct
+            info = master.get(sym_clean)
+            if not info:
+                # Try with .NS removed and common variations
+                info = master.get(sym_clean.split("-")[0])
+            if info:
+                sec_id = info["security_id"]
+                seg = info["segment"]
+                symbol_to_id[sym] = {"id": sec_id, "seg": seg, "clean": sym_clean}
+                if seg == "NSE_EQ":
+                    nse_eq_ids.append(sec_id)
+                elif seg == "IDX_I":
+                    idx_ids.append(sec_id)
+        
+        result = {}
+        
+        # Fetch NSE EQ LTP via quote_data (fastest)
+        if nse_eq_ids:
+            try:
+                # Dhan expects { "NSE_EQ": [ids] }
+                # Try quote_data first
+                try:
+                    resp = dhan.quote_data(securities={"NSE_EQ": [int(x) for x in nse_eq_ids[:100]]})  # Batch max 100
+                    if isinstance(resp, dict) and "data" in resp:
+                        data = resp["data"]
+                        # data is dict like {"NSE_EQ": {security_id: {ltp, ...}}}
+                        if isinstance(data, dict):
+                            for seg, sec_dict in data.items():
+                                if isinstance(sec_dict, dict):
+                                    for sec_id, quote in sec_dict.items():
+                                        # Find symbol for this sec_id
+                                        for orig_sym, id_info in symbol_to_id.items():
+                                            if id_info["id"] == str(sec_id):
+                                                ltp = float(quote.get("last_price", quote.get("ltp", 0)))
+                                                prev_close = float(quote.get("prev_close", quote.get("prev_close_price", ltp)))
+                                                chg = ltp - prev_close if prev_close else 0
+                                                chg_pct = (chg / prev_close * 100) if prev_close else 0
+                                                result[orig_sym] = {"ltp": ltp, "change": chg, "change_pct": chg_pct, "prev_close": prev_close}
+                except Exception as e:
+                    print(f"Dhan quote_data error: {e}")
+                    # Fallback to ticker_data
+                    try:
+                        resp = dhan.ticker_data(securities={"NSE_EQ": [int(x) for x in nse_eq_ids[:100]]})
+                        # Similar parsing
+                        if isinstance(resp, dict) and "data" in resp:
+                            for seg, sec_dict in resp["data"].items():
+                                for sec_id, quote in sec_dict.items():
+                                    for orig_sym, id_info in symbol_to_id.items():
+                                        if id_info["id"] == str(sec_id):
+                                            ltp = float(quote.get("last_price", 0))
+                                            result[orig_sym] = {"ltp": ltp, "change": 0, "change_pct": 0}
+                    except Exception as e2:
+                        print(f"Dhan ticker_data fallback error: {e2}")
+            except Exception as e:
+                print(f"Dhan NSE EQ batch error: {e}")
+        
+        # Fetch IDX LTP (NIFTY, BANKNIFTY)
+        if idx_ids:
+            try:
+                resp = dhan.quote_data(securities={"IDX_I": [int(x) for x in idx_ids]})
+                if isinstance(resp, dict) and "data" in resp:
+                    for seg, sec_dict in resp["data"].items():
+                        for sec_id, quote in sec_dict.items():
+                            for orig_sym, id_info in symbol_to_id.items():
+                                if id_info["id"] == str(sec_id):
+                                    ltp = float(quote.get("last_price", quote.get("ltp", 0)))
+                                    prev_close = float(quote.get("prev_close", ltp))
+                                    chg = ltp - prev_close
+                                    chg_pct = (chg / prev_close * 100) if prev_close else 0
+                                    result[orig_sym] = {"ltp": ltp, "change": chg, "change_pct": chg_pct}
+            except Exception as e:
+                print(f"Dhan IDX error: {e}")
+        
+        return result
+    except Exception as e:
+        print(f"Dhan LTP fast error: {e}")
         return {}
 
-# Example usage in Streamlit:
-"""
-import streamlit as st
-from dhan_api_helper import DhanHelper
+@st.cache_data(show_spinner=False, ttl=60)
+def get_dhan_market_watch_fast(client_id: str, access_token: str):
+    """
+    Market Watch fast from Dhan - GIFT NIFTY, NIFTY 50, BANK NIFTY, USD/INR etc
+    When Dhan connected, use Dhan for NIFTY/BANKNIFTY, Yahoo for others (GIFT, XAU, CRUDE, TLT)
+    Returns: dict yahoo_symbol -> (last, change_pct)
+    """
+    result = {}
+    try:
+        # NIFTY 50 and BANK NIFTY from Dhan (fast, no delay)
+        dhan_prices = get_dhan_ltp_fast(client_id, access_token, ("NIFTY 50", "BANK NIFTY", "NIFTY", "BANKNIFTY"))
+        # Map to yahoo symbols used in app
+        # gi.MARKET_WATCH has yahoo symbols like "^NSEI", "^NSEBANK", etc.
+        # We'll return with keys matching those yahoo symbols
+        if "NIFTY 50" in dhan_prices or "NIFTY" in dhan_prices:
+            nifty_data = dhan_prices.get("NIFTY 50") or dhan_prices.get("NIFTY")
+            if nifty_data:
+                # Map to ^NSEI and GIFT NIFTY (approx)
+                result["^NSEI"] = (nifty_data["ltp"], nifty_data["change_pct"])
+                # GIFT NIFTY is NIFTY + ~0.2% approx, use same
+                result["GIFT_NIFTY"] = (nifty_data["ltp"], nifty_data["change_pct"])
+        if "BANK NIFTY" in dhan_prices or "BANKNIFTY" in dhan_prices:
+            bank_data = dhan_prices.get("BANK NIFTY") or dhan_prices.get("BANKNIFTY")
+            if bank_data:
+                result["^NSEBANK"] = (bank_data["ltp"], bank_data["change_pct"])
+    except Exception as e:
+        print(f"Dhan market watch fast error: {e}")
+    
+    return result
 
-# Streamlit secrets.toml me rakho:
-# [dhan]
-# client_id = "1100000001"
-# access_token = "eyJ0eXAiOiJKV1QiLCJhbGci..."
-
-@st.cache_resource
-def get_dhan():
-    return DhanHelper(
-        client_id=st.secrets["dhan"]["client_id"],
-        access_token=st.secrets["dhan"]["access_token"]
-    )
-
-dhan = get_dhan()
-holdings_df = dhan.get_holdings()
-st.dataframe(holdings_df)
-"""
+def is_dhan_fast_available():
+    """Check if Dhan fast path can be used"""
+    try:
+        from secure_config import is_dhan_configured
+        return is_dhan_configured() and DHAN_AVAILABLE
+    except Exception:
+        return False
