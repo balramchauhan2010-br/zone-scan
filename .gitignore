@@ -1,0 +1,13 @@
+# Secure - API keys kabhi GitHub par mat push karo
+.streamlit/secrets.toml
+.env
+*.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
+
+# Cache
+.cache/
+*.log
