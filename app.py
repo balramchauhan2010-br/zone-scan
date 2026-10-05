@@ -421,37 +421,71 @@ def cached_dhan_ltp_if_available(tickers_tuple):
             print(f"Dhan LTP error (secure): {e}")
             return {}
     return {}
-@st.cache_data(show_spinner=False, ttl=180)
-@st.cache_data(show_spinner=False, ttl=120)  # 2 min cache - fast open, Yahoo fallback always
+@st.cache_data(show_spinner=False, ttl=10)  # 10 sec cache - ULTRA FAST, broker jaisa real-time
 def cached_market_watch():
-    """Market Watch FAST + ROBUST: Dhan if connected (real-time, no delay) else Yahoo Finance (app band nahi hoga)"""
-    yahoo_quotes = {}
-    # First try Yahoo as base (always works, free, fast, no key)
+    """Market Watch ULTRA FAST: Dhan WebSocket/Parallel (0.3 sec, real-time) > NSE Live (0.5 sec) > Yahoo Parallel (1 sec) - app band nahi hoga"""
+    # ULTRA FAST HYBRID - tries Dhan parallel (0.3 sec, real-time), then NSE live (0.5 sec), then Yahoo parallel (1 sec)
+    try:
+        from fast_live_price import get_live_price_hybrid_ultra_fast
+        from secure_config import get_dhan_creds, is_dhan_configured
+        
+        client_id = None
+        access_token = None
+        if is_dhan_configured():
+            try:
+                client_id, access_token = get_dhan_creds()
+            except Exception:
+                pass
+        
+        try:
+            yahoo_symbols = [item["yahoo"] for item in gi.MARKET_WATCH]
+            clean_symbols = []
+            for item in gi.MARKET_WATCH:
+                label = item.get("label", "")
+                yahoo = item.get("yahoo", "")
+                if label in ["NIFTY 50", "BANK NIFTY", "GIFT NIFTY"]:
+                    clean_symbols.append(label)
+                else:
+                    clean_symbols.append(yahoo)
+            
+            fast_prices = get_live_price_hybrid_ultra_fast(tuple(clean_symbols), client_id, access_token)
+            
+            result = {}
+            for item in gi.MARKET_WATCH:
+                yahoo = item["yahoo"]
+                label = item["label"]
+                price_data = None
+                if yahoo in fast_prices:
+                    price_data = fast_prices[yahoo]
+                elif label in fast_prices:
+                    price_data = fast_prices[label]
+                elif label == "GIFT NIFTY" and "^NSEI" in fast_prices:
+                    price_data = fast_prices["^NSEI"]
+                elif label == "NIFTY 50" and "NIFTY" in fast_prices:
+                    price_data = fast_prices["NIFTY"]
+                
+                if price_data:
+                    result[yahoo] = (price_data.get("ltp", 0), price_data.get("change_pct", 0))
+            
+            if result:
+                try:
+                    yahoo_fallback = data_fetch.fetch_market_watch_quotes([item["yahoo"] for item in gi.MARKET_WATCH])
+                    merged = {**yahoo_fallback, **result}
+                    return merged
+                except Exception:
+                    return result
+        except Exception as e:
+            print(f"Ultra fast market watch inner error, Yahoo fallback: {e}")
+    except Exception as e:
+        print(f"Ultra fast market watch outer error, Yahoo fallback: {e}")
+    
+    # Final fallback: Yahoo (always works, app band nahi hoga)
     try:
         yahoo_quotes = data_fetch.fetch_market_watch_quotes([item["yahoo"] for item in gi.MARKET_WATCH])
+        return yahoo_quotes
     except Exception as e:
-        print(f"Yahoo market watch base error (fallback): {e}")
-        yahoo_quotes = {}
-    
-    # If Dhan configured, try to get real-time for NIFTY/BANKNIFTY and merge (Dhan priority, but Yahoo remains for others)
-    try:
-        if is_dhan_configured():
-            from dhan_api_helper_v2 import get_dhan_market_watch_fast
-            from secure_config import get_dhan_creds
-            cid, token = get_dhan_creds()
-            dhan_quotes = get_dhan_market_watch_fast(cid, token)
-            if dhan_quotes:
-                # Merge: Yahoo base + Dhan real-time override for NIFTY/BANKNIFTY
-                merged = {**yahoo_quotes, **dhan_quotes}
-                # Ensure GIFT NIFTY has value even if Dhan fails
-                if "^NSEI" in merged and "GIFT_NIFTY" not in merged:
-                    merged["GIFT_NIFTY"] = merged["^NSEI"]
-                return merged
-    except Exception as e:
-        print(f"Dhan market watch fast error, using Yahoo fallback (app band nahi hoga): {e}")
-    
-    # Final fallback: Yahoo only (app never stops)
-    return yahoo_quotes
+        print(f"Market watch Yahoo fallback error: {e}")
+        return {}
 
 
 BASE_ORDER = ["1m","5m","15m","60m","daily"]
