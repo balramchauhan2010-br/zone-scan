@@ -1181,128 +1181,21 @@ def render_table_main(df, file_label, all_frames=None):
     else:
         display_df["Hypothesis (Short)"] = "Enable detailed analysis below"
 
-    # ---------- NEW: News + AI Hypothesis + Powerful News - Multi Source Free (User Requirement 4) ----------
-    # User requirement: News ke liye powerful free source inbuilt ho jise Gemini AI kai layer me verify kare
-    # Sources: NSE + Moneycontrol RSS + ET Markets RSS + Google News + BSE - free, no key, Gemini multi-layer verification
+    # ---------- CLEAN: No news links in table - User wants only core trading columns, news in top notification ----------
+    # User complaint: News link table me nahi chahiye, top notification me chahiye + link khul nahi raha (broken with TRADINGVIEW)
+    # So table me sirf: Symbol, Timeframe, Direction, Pattern, Entry, SL, Target, LTP, Dist %
     try:
-        top_news_check = display_df.sort_values("Distance %", key=lambda s: s.abs()).head(50)
-        news_links = []
-        powerful_flags = []
-        powerful_descs = []
-        ai_links = []
-        for _, row in top_news_check.iterrows():
-            ticker = row.get("Ticker")
-            tf = row.get("Timeframe")
-            # Powerful multi-source news - try powerful_news_fetcher first (free, no key, Gemini verified)
-            nse_link = ""
-            is_powerful = False
-            p_desc = ""
-            try:
-                from powerful_news_fetcher import get_news_for_symbol_powerful, get_all_powerful_free_news
-                sym_news = get_news_for_symbol_powerful(ticker.replace(".NS",""), limit=3)
-                if not sym_news.empty:
-                    # Use first news link as main link
-                    nse_link = sym_news.iloc[0].get("link", "")
-                    p_desc = sym_news.iloc[0].get("title", "")[:100]
-                    is_powerful = bool(sym_news.iloc[0].get("is_powerful", False)) if "is_powerful" in sym_news.columns else True
-                    # If multiple sources report same symbol, high confidence powerful
-                    if len(sym_news) >= 2:
-                        is_powerful = True
-                        p_desc = f"[Verified {len(sym_news)} sources] " + p_desc
-                else:
-                    # Fallback to NSE link
-                    nse_link = get_nse_links(ticker).get("nse_announcements", "") if SECTOR_AVAILABLE else f"https://www.nseindia.com/companies-listing/corporate-filings-announcements?symbol={ticker.replace('.NS','')}"
-                    is_powerful, p_desc, _ = cached_powerful_news_check(ticker)
-            except Exception:
-                # Fallback to old method
-                try:
-                    nse_link = get_nse_links(ticker).get("nse_announcements", "") if SECTOR_AVAILABLE else f"https://www.nseindia.com/companies-listing/corporate-filings-announcements?symbol={ticker.replace('.NS','')}"
-                    is_powerful, p_desc, _ = cached_powerful_news_check(ticker)
-                except Exception:
-                    nse_link = f"https://www.nseindia.com/get-quotes/equity?symbol={ticker.replace('.NS','')}"
-                    p_desc = ""
-            
-            news_links.append(nse_link)
-            powerful_flags.append(is_powerful)
-            powerful_descs.append(p_desc)
-            # AI Hypothesis link - multi-layer Gemini verified
-            ai_link = f"?symbol={ticker}&tf={tf}#detailed-analysis"
-            ai_links.append(ai_link)
-        
-        # Map to display_df
-        news_map = {(r["Ticker"], r["Timeframe"]): l for r, l in zip(top_news_check.to_dict("records"), news_links)}
-        powerful_map = {(r["Ticker"], r["Timeframe"]): f for r, f in zip(top_news_check.to_dict("records"), powerful_flags)}
-        powerful_desc_map = {(r["Ticker"], r["Timeframe"]): d for r, d in zip(top_news_check.to_dict("records"), powerful_descs)}
-        ai_map = {(r["Ticker"], r["Timeframe"]): l for r, l in zip(top_news_check.to_dict("records"), ai_links)}
-        
-        display_df["_key"] = list(zip(display_df["Ticker"], display_df["Timeframe"]))
-        display_df["📰 News"] = display_df["_key"].map(news_map).fillna("")
-        display_df["⚡ Powerful"] = display_df["_key"].map(powerful_map).fillna(False)
-        display_df["⚡ News Desc"] = display_df["_key"].map(powerful_desc_map).fillna("")
-        display_df["🤖 AI Link"] = display_df["_key"].map(ai_map).fillna("")
-        display_df = display_df.drop(columns=["_key"])
-    except Exception as e:
-        display_df["📰 News"] = ""
-        display_df["⚡ Powerful"] = False
-        display_df["⚡ News Desc"] = ""
-        display_df["🤖 AI Link"] = ""
-
-    # ---------- CLEAN TABLE - User Requirement 3 ----------
-    # Risk:Reward हटाया, News Link लगाया, Cross वाले columns हटाए: Powerful News?, HQ Zone, White Area, Base Count, Touch Count, Zone Created, Last Bar Time, Hypothesis Short, Price Position, Distance from Entry
-    # Keep only: Symbol, Timeframe, Direction, Pattern, Entry, Stop Loss, Target, News Link (instead of Risk:Reward), Current Price, Distance %, AI Hypothesis, News
+        # No news building for table - keep table clean and fast
+        pass
+    except Exception:
+        pass
     
-    # Build News Link column (replace Risk:Reward) - FIXED: Actual article link from powerful sources, not just NSE
-    # User complaint: News link directly NSE opens, not working - now opens actual Moneycontrol/ET/Google News article
-    try:
-        # Try powerful_news_fetcher for actual article links (Moneycontrol, ET, Google News) - multi-source, Gemini verified
-        from powerful_news_fetcher import get_news_for_symbol_powerful
-        news_link_list = []
-        powerful_text_list = []
-        for _, row in display_df.iterrows():
-            sym = str(row.get("Symbol","")).replace(".NS","").upper()
-            try:
-                sym_news = get_news_for_symbol_powerful(sym, limit=2)
-                if not sym_news.empty:
-                    # Use actual article link (Moneycontrol/ET/Google News), not NSE generic
-                    first = sym_news.iloc[0]
-                    actual_link = first.get("link", "")
-                    title = first.get("title", "")[:100]
-                    source = first.get("source", "NSE")
-                    # If multiple sources, show verified tag
-                    if len(sym_news) >= 2:
-                        title = f"[Verified {len(sym_news)} sources] {title}"
-                    news_link_list.append(actual_link if actual_link else f"https://www.nseindia.com/get-quotes/equity?symbol={sym}")
-                    powerful_text_list.append(f"{source}: {title}")
-                else:
-                    # Fallback to NSE announcement link + powerful desc
-                    base_link = row.get("📰 News", "") if "📰 News" in display_df.columns else ""
-                    desc = row.get("⚡ News Desc", "") if "⚡ News Desc" in display_df.columns else ""
-                    if base_link:
-                        news_link_list.append(base_link)
-                    else:
-                        news_link_list.append(f"https://www.nseindia.com/get-quotes/equity?symbol={sym}")
-                    powerful_text_list.append(desc[:80] if desc else "")
-            except Exception:
-                news_link_list.append(f"https://www.nseindia.com/get-quotes/equity?symbol={sym}")
-                powerful_text_list.append("")
-        display_df["🔗 News Link"] = news_link_list
-        display_df["📰 Powerful News"] = powerful_text_list
-    except Exception as e:
-        print(f"News link powerful fetcher error: {e}")
-        # Fallback old logic
-        try:
-            if "📰 News" in display_df.columns and "⚡ News Desc" in display_df.columns:
-                def make_news_link(row):
-                    base_link = row.get("📰 News", "")
-                    return base_link if base_link else f"https://www.nseindia.com/get-quotes/equity?symbol={row.get('Symbol','').replace('.NS','')}"
-                display_df["🔗 News Link"] = display_df.apply(make_news_link, axis=1)
-                display_df["📰 Powerful News"] = display_df["⚡ News Desc"].fillna("").apply(lambda x: (x[:80] + "...") if len(x) > 80 else x)
-            else:
-                display_df["🔗 News Link"] = display_df["Symbol"].apply(lambda s: f"https://www.nseindia.com/get-quotes/equity?symbol={str(s).replace('.NS','')}")
-                display_df["📰 Powerful News"] = ""
-        except Exception:
-            display_df["🔗 News Link"] = ""
-            display_df["📰 Powerful News"] = ""
+    # CLEAN: No news links in table - only core trading columns (User wants news in top notification, not table)
+    # Remove any existing news columns to avoid broken links like https://...?symbol=HTTPS://WWW.TRADINGVIEW...
+    for col in ["🔗 News Link", "📰 Powerful News", "📰 News", "⚡ Powerful", "⚡ News Desc", "🤖 AI Link"]:
+        if col in display_df.columns:
+            display_df = display_df.drop(columns=[col])
+    ""
 
     # Drop cross-marked columns (User crossed in screenshots)
     cols_to_drop = [
@@ -1444,39 +1337,12 @@ def render_table_validated(df, file_label, all_frames=None):
     else:
         display_df["Hypothesis (Short)"]="See Detailed Analysis below"
 
-    # ---------- NEW: News + Powerful + AI Links for Validated too ----------
-    try:
-        top_news_check_v = display_df.sort_values("Distance %", key=lambda s: s.abs()).head(50)
-        news_links_v = []
-        powerful_flags_v = []
-        powerful_descs_v = []
-        ai_links_v = []
-        for _, row in top_news_check_v.iterrows():
-            ticker = row.get("Ticker")
-            tf = row.get("Timeframe")
-            nse_link = get_nse_links(ticker).get("nse_announcements", "") if SECTOR_AVAILABLE else f"https://www.nseindia.com/companies-listing/corporate-filings-announcements?symbol={ticker.replace('.NS','')}"
-            news_links_v.append(nse_link)
-            is_powerful, p_desc, _ = cached_powerful_news_check(ticker)
-            powerful_flags_v.append(is_powerful)
-            powerful_descs_v.append(p_desc)
-            ai_links_v.append(f"?symbol={ticker}&tf={tf}#detailed-analysis-validated")
-        
-        news_map_v = {(r["Ticker"], r["Timeframe"]): l for r, l in zip(top_news_check_v.to_dict("records"), news_links_v)}
-        powerful_map_v = {(r["Ticker"], r["Timeframe"]): f for r, f in zip(top_news_check_v.to_dict("records"), powerful_flags_v)}
-        powerful_desc_map_v = {(r["Ticker"], r["Timeframe"]): d for r, d in zip(top_news_check_v.to_dict("records"), powerful_descs_v)}
-        ai_map_v = {(r["Ticker"], r["Timeframe"]): l for r, l in zip(top_news_check_v.to_dict("records"), ai_links_v)}
-        
-        display_df["_key"] = list(zip(display_df["Ticker"], display_df["Timeframe"]))
-        display_df["📰 News"] = display_df["_key"].map(news_map_v).fillna("")
-        display_df["⚡ Powerful"] = display_df["_key"].map(powerful_map_v).fillna(False)
-        display_df["⚡ News Desc"] = display_df["_key"].map(powerful_desc_map_v).fillna("")
-        display_df["🤖 AI Link"] = display_df["_key"].map(ai_map_v).fillna("")
-        display_df = display_df.drop(columns=["_key"])
-    except Exception:
-        display_df["📰 News"] = ""
-        display_df["⚡ Powerful"] = False
-        display_df["⚡ News Desc"] = ""
-        display_df["🤖 AI Link"] = ""
+    # CLEAN Validated: No news links in table - User wants news in top notification only
+    # Remove any existing news columns to avoid broken links
+    for col in ["🔗 News Link", "📰 Powerful News", "📰 News", "⚡ Powerful", "⚡ News Desc", "🤖 AI Link"]:
+        if col in display_df.columns:
+            display_df = display_df.drop(columns=[col])
+    
 
     # ---------- CLEAN VALIDATED TABLE - User Requirement 3 ----------
     cols_to_drop_v = [
@@ -1489,28 +1355,11 @@ def render_table_validated(df, file_label, all_frames=None):
     ]
     existing_drop_v = [c for c in cols_to_drop_v if c in display_df.columns]
     clean_df_v = display_df.drop(columns=existing_drop_v, errors="ignore")
-    if "🔗 News Link" not in clean_df_v.columns or clean_df_v["🔗 News Link"].str.contains("nseindia.com/get-quotes", na=False).any():
-        # FIXED: Use actual powerful news article link (Moneycontrol/ET/Google News) not just NSE generic
-        try:
-            from powerful_news_fetcher import get_news_for_symbol_powerful
-            news_links_v2 = []
-            for _, row in clean_df_v.iterrows():
-                sym = str(row.get("Symbol","")).replace(".NS","").upper()
-                try:
-                    sym_news = get_news_for_symbol_powerful(sym, limit=1)
-                    if not sym_news.empty:
-                        actual_link = sym_news.iloc[0].get("link","")
-                        news_links_v2.append(actual_link if actual_link else f"https://www.nseindia.com/get-quotes/equity?symbol={sym}")
-                    else:
-                        news_links_v2.append(f"https://www.nseindia.com/get-quotes/equity?symbol={sym}")
-                except Exception:
-                    news_links_v2.append(f"https://www.nseindia.com/get-quotes/equity?symbol={sym}")
-            clean_df_v["🔗 News Link"] = news_links_v2
-        except Exception:
-            try:
-                clean_df_v["🔗 News Link"] = clean_df_v["📰 News"] if "📰 News" in clean_df_v.columns else clean_df_v["Symbol"].apply(lambda s: f"https://www.nseindia.com/get-quotes/equity?symbol={str(s).replace('.NS','')}")
-            except Exception:
-                clean_df_v["🔗 News Link"] = ""
+    # CLEAN Validated: No news links - only core columns
+    for col in ["🔗 News Link", "📰 Powerful News", "📰 News", "⚡ Powerful", "⚡ News Desc", "🤖 AI Link"]:
+        if col in clean_df_v.columns:
+            clean_df_v = clean_df_v.drop(columns=[col])
+    
     if "📰 Powerful News" not in clean_df_v.columns:
         try:
             clean_df_v["📰 Powerful News"] = clean_df_v["⚡ News Desc"] if "⚡ News Desc" in clean_df_v.columns else ""
