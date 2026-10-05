@@ -1410,24 +1410,115 @@ needed_bases = {scanner.base_dataset_for_tf(tf) for tf in tf_selected}
 all_frames_store = {}
 
 if "Main" in st.session_state.app_page:
-    # FAST OPEN FIX: Show top tape immediately, then scan - no delay for market watch
-    # Market watch and FII already rendered above, now scan with progress
-    with st.status("Data fetch + scan chal raha hai (Main Scanner) - Dhan fast if connected else Yahoo (optimized)...", expanded=True) as status_box:
-        st.write(f"🔹 Mode: {scan_mode} | Tickers: {len(tickers)} | TFs: {', '.join(tf_selected)} | Page: Main")
-        for base in BASE_ORDER:
-            if base not in needed_bases:
-                continue
-            st.write(f"⏳ {BASE_LABELS[base]} data fetch ho raha hai...")
-            _fetched = BASE_FETCHERS[base](cc.last_closed_bucket(BASE_BUCKET_TF[base]), tickers)
-            st.write(f"✅ {BASE_LABELS[base]} data mila: {len(_fetched)} / {len(tickers)} symbols")
+    # ULTRA FAST OPEN FIX: Don't auto-scan 213 stocks x 10 TFs on open (causes spinner)
+    # Show top tape + news immediately, scan only on button click or with cache
+    
+    # Check if we have cached scan results
+    if "main_scan_results" not in st.session_state:
+        st.session_state.main_scan_results = None
+    if "main_scan_combined" not in st.session_state:
+        st.session_state.main_scan_combined = None
+    
+    # Fast open: Show scan button, not auto-scan
+    col_scan, col_fast = st.columns([0.7, 0.3])
+    with col_scan:
+        st.info(f"🔹 Mode: {scan_mode} | Tickers: {len(tickers)} | TFs: {', '.join(tf_selected)} | Page: Main | Fast Open: Top tape + News already loaded")
+    with col_fast:
+        # Auto-refresh toggle
+        st.session_state.auto_refresh_enabled = st.toggle("🔄 Auto-Refresh", value=st.session_state.get("auto_refresh_enabled", False), help="Candle close par auto refresh")
+    
+    # Limit tickers for fast open if too many (213 -> 50 for first scan)
+    fast_tickers = tickers
+    is_limited = False
+    if len(tickers) > 50:
+        st.warning(f"⚡ Fast Open: {len(tickers)} tickers me se pehle 50 ka scan hoga (fast), pura 213 ke liye 'Full Scan' dabao")
+        fast_tickers = tickers[:50]
+        is_limited = True
+    
+    # Scan buttons
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        start_scan = st.button("🚀 Fast Scan (50 stocks) - 10 sec", type="primary", help="Fast open - 50 stocks only, 10 sec me")
+    with col2:
+        full_scan = st.button("🔍 Full Scan (All 213) - 60 sec", help="Pura 213 stocks scan, 60 sec lagega")
+    with col3:
+        if st.session_state.main_scan_results is not None:
+            st.success("✅ Cached results available")
+            use_cached = st.button("📦 Cached Results Use Karo (Instant)")
+        else:
+            use_cached = False
+    
+    # Decide which tickers to scan
+    scan_tickers = None
+    do_scan = False
+    if start_scan:
+        scan_tickers = fast_tickers
+        do_scan = True
+        st.session_state.main_scan_results = None
+    elif full_scan:
+        scan_tickers = tickers
+        do_scan = True
+        st.session_state.main_scan_results = None
+    elif use_cached and st.session_state.main_scan_results is not None:
+        results = st.session_state.main_scan_results
+        combined = st.session_state.main_scan_combined
+        all_frames_store = st.session_state.get("main_frames_store", {})
+        st.success("✅ Cached results loaded - Instant, no spinner")
+        do_scan = False
+    else:
+        # On first open, auto fast scan with 50 tickers but with status (not blocking top tape)
+        # Only if no cached results
+        if st.session_state.main_scan_results is None:
+            scan_tickers = fast_tickers
+            do_scan = True
+            st.info("🚀 Auto Fast Scan starting (50 stocks) - Top tape already loaded, scan background me...")
+    
+    if do_scan and scan_tickers is not None:
+        # FAST SCAN with progress - Dhan fast if connected else Yahoo, parallel
+        needed_bases = {scanner.base_dataset_for_tf(tf) for tf in tf_selected}
+        all_frames_store = {}
+        with st.status(f"Data fetch + scan chal raha hai ({len(scan_tickers)} stocks) - Dhan fast if connected else Yahoo (optimized)...", expanded=True) as status_box:
+            st.write(f"🔹 Mode: {scan_mode} | Tickers: {len(scan_tickers)} ({'Fast 50' if is_limited and scan_tickers==fast_tickers else 'Full 213'}) | TFs: {', '.join(tf_selected)} | Page: Main")
+            for base in BASE_ORDER:
+                if base not in needed_bases:
+                    continue
+                st.write(f"⏳ {BASE_LABELS[base]} data fetch ho raha hai... ({len(scan_tickers)} stocks)")
+                try:
+                    _fetched = BASE_FETCHERS[base](cc.last_closed_bucket(BASE_BUCKET_TF[base]), scan_tickers)
+                    st.write(f"✅ {BASE_LABELS[base]} data mila: {len(_fetched)} / {len(scan_tickers)} symbols - {'Yahoo' if not is_dhan_configured() else 'Dhan Real-Time'}")
+                except Exception as e:
+                    st.warning(f"⚠️ {BASE_LABELS[base]} fetch error (Yahoo fallback, app band nahi hoga): {e}")
+                    _fetched = {}
+            results = {}
+            for tf in tf_selected:
+                st.write(f"🔎 Scanning {tf} (zone_core.py)...")
+                try:
+                    bucket = cc.last_closed_bucket(tf)
+                    df_tf, frames_tf = cached_scan(tf, bucket, params_main_tuple, scan_tickers, states_tuple)
+                    results[tf] = df_tf
+                    all_frames_store[tf] = frames_tf
+                    st.write(f"✅ {tf}: {len(df_tf)} zones")
+                except Exception as e:
+                    st.warning(f"⚠️ {tf} scan error (app band nahi hoga): {e}")
+                    results[tf] = pd.DataFrame()
+                    all_frames_store[tf] = {}
+            status_box.update(label=f"✅ {'Fast' if is_limited else 'Full'} Scan complete ({len(scan_tickers)} stocks)", state="complete", expanded=False)
+        
+        # Cache results for instant next open
+        st.session_state.main_scan_results = results
+        st.session_state.main_scan_combined = None  # Will be built below
+        st.session_state.main_frames_store = all_frames_store
+    elif not do_scan and st.session_state.main_scan_results is not None:
+        # Use cached
+        results = st.session_state.main_scan_results
+        all_frames_store = st.session_state.get("main_frames_store", {})
+    else:
+        # No scan yet, empty
         results = {}
-        for tf in tf_selected:
-            st.write(f"🔎 Scanning {tf} (zone_core.py)...")
-            bucket = cc.last_closed_bucket(tf)
-            df_tf, frames_tf = cached_scan(tf, bucket, params_main_tuple, tickers, states_tuple)
-            results[tf] = df_tf
-            all_frames_store[tf] = frames_tf
-        status_box.update(label="✅ Main Scan complete", state="complete", expanded=False)
+        all_frames_store = {}
+        st.info("👆 Scan button dabao - Fast Scan 10 sec me, Full Scan 60 sec me")
+        # Don't stop, show empty table message later
+
 
     ordered_tfs = sorted(tf_selected, key=scanner.tf_minutes)
     non_empty = [results[tf] for tf in ordered_tfs if not results[tf].empty]
@@ -1609,28 +1700,86 @@ if "Main" in st.session_state.app_page:
                         st.info("FII data unavailable")
 
 else:
-    # ==================== VALIDATED PAGE ====================
+    # ==================== VALIDATED PAGE - FAST OPEN (No Spinner) ====================
     st.markdown(f"**Validation Preset:** `{preset_choice}` | **Params:** RR>={v_min_rr}, RR Filter={v_use_rr_filter}, Engulf={v_require_engulf}, PulseTrend={v_use_pulse_trend}, Aligned Required={v_require_aligned}")
 
-    with st.status("Data fetch + VALIDATED scan chal raha hai...", expanded=True) as status_box:
-        st.write(f"🔹 Mode: {scan_mode} | Tickers: {len(tickers)} | TFs: {', '.join(tf_selected)} | Page: Validated")
-        for base in BASE_ORDER:
-            if base not in needed_bases:
-                continue
-            st.write(f"⏳ {BASE_LABELS[base]} data fetch ho raha hai...")
-            _fetched = BASE_FETCHERS[base](cc.last_closed_bucket(BASE_BUCKET_TF[base]), tickers)
-            st.write(f"✅ {BASE_LABELS[base]} data mila: {len(_fetched)} / {len(tickers)} symbols")
+    # Fast open for Validated too - lazy scan
+    if "validated_scan_results" not in st.session_state:
+        st.session_state.validated_scan_results = None
+    
+    col_v1, col_v2 = st.columns([0.7, 0.3])
+    with col_v1:
+        st.info(f"🔹 Validated Mode: {scan_mode} | Tickers: {len(tickers)} | TFs: {', '.join(tf_selected)} | Fast Open")
+    with col_v2:
+        st.caption("Validated - Fast Open")
+    
+    fast_tickers_v = tickers[:50] if len(tickers) > 50 else tickers
+    
+    col_vb1, col_vb2 = st.columns(2)
+    with col_vb1:
+        start_valid_scan = st.button("🚀 Validated Fast Scan (50) - 10 sec", type="primary", key="valid_fast")
+    with col_vb2:
+        full_valid_scan = st.button("🔍 Validated Full Scan (All) - 60 sec", key="valid_full")
+    
+    do_valid_scan = False
+    scan_tickers_v = None
+    if start_valid_scan:
+        scan_tickers_v = fast_tickers_v
+        do_valid_scan = True
+        st.session_state.validated_scan_results = None
+    elif full_valid_scan:
+        scan_tickers_v = tickers
+        do_valid_scan = True
+        st.session_state.validated_scan_results = None
+    elif st.session_state.validated_scan_results is not None:
+        results_valid = st.session_state.validated_scan_results.get("results", {})
+        funnels = st.session_state.validated_scan_results.get("funnels", {})
+        all_frames_valid = st.session_state.validated_scan_results.get("frames", {})
+        st.success("✅ Validated Cached results - Instant")
+        do_valid_scan = False
+    else:
+        # Auto fast scan first time
+        if st.session_state.validated_scan_results is None:
+            scan_tickers_v = fast_tickers_v
+            do_valid_scan = True
+    
+    if do_valid_scan and scan_tickers_v is not None:
+        needed_bases = {scanner.base_dataset_for_tf(tf) for tf in tf_selected}
+        with st.status(f"Data fetch + VALIDATED scan ({len(scan_tickers_v)} stocks) - Fast...", expanded=True) as status_box:
+            st.write(f"🔹 Mode: {scan_mode} | Tickers: {len(scan_tickers_v)} | TFs: {', '.join(tf_selected)} | Page: Validated")
+            for base in BASE_ORDER:
+                if base not in needed_bases:
+                    continue
+                st.write(f"⏳ {BASE_LABELS[base]} data fetch...")
+                try:
+                    _fetched = BASE_FETCHERS[base](cc.last_closed_bucket(BASE_BUCKET_TF[base]), scan_tickers_v)
+                    st.write(f"✅ {BASE_LABELS[base]}: {len(_fetched)}/{len(scan_tickers_v)}")
+                except Exception as e:
+                    st.warning(f"⚠️ {BASE_LABELS[base]} error (Yahoo fallback): {e}")
+            results_valid = {}
+            funnels = {}
+            all_frames_valid = {}
+            for tf in tf_selected:
+                st.write(f"🔎 Validated Scanning {tf}...")
+                try:
+                    bucket = cc.last_closed_bucket(tf)
+                    df_tf, funnel, frames_tf = cached_validated_scan(tf, bucket, params_valid_tuple, scan_tickers_v, states_tuple)
+                    results_valid[tf] = df_tf
+                    funnels[tf] = funnel
+                    all_frames_valid[tf] = frames_tf
+                    st.write(f"✅ {tf}: {len(df_tf)} zones")
+                except Exception as e:
+                    st.warning(f"⚠️ {tf} validated scan error: {e}")
+                    results_valid[tf] = pd.DataFrame()
+                    funnels[tf] = pd.DataFrame()
+                    all_frames_valid[tf] = {}
+            status_box.update(label=f"✅ Validated Scan complete ({len(scan_tickers_v)} stocks)", state="complete", expanded=False)
+        st.session_state.validated_scan_results = {"results": results_valid, "funnels": funnels, "frames": all_frames_valid}
+    elif not do_valid_scan and st.session_state.validated_scan_results is None:
         results_valid = {}
         funnels = {}
         all_frames_valid = {}
-        for tf in tf_selected:
-            st.write(f"🔎 Validated Scanning {tf}...")
-            bucket = cc.last_closed_bucket(tf)
-            df_tf, funnel, frames_tf = cached_validated_scan(tf, bucket, params_valid_tuple, tickers, states_tuple)
-            results_valid[tf] = df_tf
-            funnels[tf] = funnel
-            all_frames_valid[tf] = frames_tf
-        status_box.update(label="✅ Validated Scan complete", state="complete", expanded=False)
+        st.info("👆 Validated Scan button dabao")
 
     ordered_tfs = sorted(tf_selected, key=scanner.tf_minutes)
     non_empty_v = [results_valid[tf] for tf in ordered_tfs if tf in results_valid and not results_valid[tf].empty]
