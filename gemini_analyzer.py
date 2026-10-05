@@ -268,6 +268,64 @@ if st.button("🌅 Aaj ka Market Overview Gemini se"):
     st.info(overview)
 """
 
+# ---------- Hindi Translation + News Hypothesis (for Bottom Big Box) ----------
+def quick_hindi_translate(text: str, api_key: str = None) -> str:
+    """NSE news ko Hindi me translate karo - Gemini secure, fast fallback"""
+    try:
+        from secure_config import get_gemini_key, is_gemini_configured
+        if not is_gemini_configured() and not api_key:
+            return text  # fallback English if no Gemini
+        key = api_key or get_gemini_key()
+        if not key or not GEMINI_AVAILABLE:
+            return text
+        import google.generativeai as genai
+        genai.configure(api_key=key)
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        prompt = f"Translate this NSE market news to Hindi in short headline style (max 25 words), keep symbol names in English:\n\n{text}\n\nHindi:"
+        resp = model.generate_content(prompt)
+        hindi = resp.text.strip()[:300]
+        return hindi
+    except Exception:
+        return text  # fallback
+
+def get_gemini_hypothesis_for_news(symbol: str, news_text: str, api_key: str = None) -> dict:
+    """Har news ka AI hypothesis Hindi me - Bullish/Bearish/Neutral + Reason"""
+    try:
+        from secure_config import get_gemini_key, is_gemini_configured
+        if not is_gemini_configured() and not api_key:
+            return {"bias": "Neutral", "reason_hindi": "Gemini connect nahi hai - rule based analysis", "impact": "Medium"}
+        key = api_key or get_gemini_key()
+        if not key or not GEMINI_AVAILABLE:
+            return {"bias": "Neutral", "reason_hindi": "Gemini library nahi hai", "impact": "Medium"}
+        import google.generativeai as genai
+        genai.configure(api_key=key)
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        prompt = f"""
+You are NSE expert. Symbol: {symbol}, News: {news_text}
+
+Task: Give trading hypothesis in Hindi (2 lines max).
+Format JSON: {{"bias": "Bullish/Bearish/Neutral", "reason_hindi": "Hindi me reason 20 words", "impact": "High/Medium/Low"}}
+
+Example: {{"bias": "Bullish 📈", "reason_hindi": "अच्छे नतीजों से खरीदारी बढ़ेगी, सपोर्ट जोन मजबूत", "impact": "High"}}
+
+JSON only:
+"""
+        resp = model.generate_content(prompt)
+        txt = resp.text.strip()
+        # Clean markdown
+        if "```json" in txt:
+            txt = txt.split("```json")[1].split("```")[0].strip()
+        elif "```" in txt:
+            txt = txt.split("```")[1].split("```")[0].strip()
+        try:
+            data = json.loads(txt)
+            return data
+        except:
+            # Fallback parse
+            return {"bias": "Neutral", "reason_hindi": txt[:200], "impact": "Medium"}
+    except Exception as e:
+        return {"bias": "Neutral", "reason_hindi": f"Error: {e}", "impact": "Low"}
+
 # ---------- Cost Saving Tips ----------
 """
 1. gemini-1.5-flash use karo (pro se 10x sasta, fast)
