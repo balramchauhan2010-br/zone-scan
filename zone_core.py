@@ -1,35 +1,36 @@
 """
-zone_core.py  -  Pine Script "Zone" indicator ka 1:1 Python scanner version.
+zone_core.py  -  Pine Script "Zone MTF" indicator ka Python scanner version.
 
-Pine se EKMAAT ANTAR:
-    * EOD Range filter: zone ka proxVal (Proximal) us din ke
-      (Day Low - eodLowBufferPct%) se (Day High + eodHighBufferPct%) ke
-      beech hona chahiye. (Scanner ko range chahiye - Pine chart me nahi.)
+INPUTS SYNC (is revision me):
+    PINE_DEFAULTS ke saare inputs ab Pine Script ("Zone MTF") ke input.*()
+    parameters se EXACT ek jaise hain - naam, default value aur order same.
+    Pine ke display-only inputs (MTF lines / Shadows / Swings) bhi yahan
+    config me rakhe gaye hain taaki dono taraf ka input-set ek ho; ye
+    scanner ki zone validation me use nahi hote (Pine me bhi sirf display
+    ke liye hain).
 
-Baaki SAB kuch Pine jaisa: inputs, leg-in/base/leg-out rules, imbalance,
+Scanner-only (Pine me nahi) - sirf ek:
+    * useEodRange: EOD Range filter ON/OFF.
+      Pine se bilkul same result chahiye to useEodRange=False kar dein.
+      (Default True rakha gaya hai taaki purana scanner behaviour na badle.)
+
+Baaki SAB kuch pehle jaisa: leg-in/base/leg-out rules, imbalance,
 engulf check, classification, scoring (densityScore/minValidScore/HQ),
-duplicate check, zone levels (SL/TP/legOutMidLevel) aur state machine.
+duplicate check, zone levels (SL/TP/legOutMidLevel).
 
-*** NEW RULE (User Requirement - Tested zone सुधार) ***
-    Pehle: Fresh -> Tested tab hota tha jab price legOutMidLevel ko touch karta tha.
-    Ab:    Fresh -> Tested tab hoga jab price PROXIMAL LINE (proxVal) ko
-           reversal ke dauran chhuyega. Jab tak proximal touch nahi hota,
-           zone Fresh hi rahega.
-           
-           Tested -> Broken sirf tab hoga jab DISTAL LINE (distVal) toot jayega.
-           Matlab Tested zone tab tak Tested hi rahega jab tak distal break na ho.
-           (maxTestedCount wala auto-break ab nahi hoga - user requirement ke hisab se)
+*** STATE RULE (User Requirement - Tested zone सुधार) ***
+    Fresh -> Tested tab hoga jab price PROXIMAL LINE (proxVal) ko chhuyega.
+    Tested -> Broken sirf tab hoga jab DISTAL LINE (distVal) toot jayega.
+    (maxTestedCount wala auto-break nahi hai - input maujood hai par inert.)
 
 Note: Pine ke "PARITY INPUTS" (closing-wick, coverage, HQ-colour, white-area,
 boring %, body mult, scan-once flags, scanAfterCandleComplete) Pine me bhi
 logic se jude nahi hain, isliye yahan bhi sirf config me rakhe hain (inert).
 
-Compatibility fix:
-    Legacy Zone fields are retained with neutral defaults so older scanner.py
-    display-column accesses (including z.whiteAreaOK) keep working. Retired
-    checks do not run; isHQ stays score-based. Standalone legacy helpers remain
-    importable but are not called by scan_zones / ZoneEngine.
-    Timestamp conversion supports naive and timezone-aware DatetimeIndex.
+Compatibility:
+    Legacy Zone fields neutral defaults ke saath retained hain taaki purane
+    scanner.py ke display-column accesses (z.whiteAreaOK etc.) chalte rahein.
+    Timestamp conversion naive aur timezone-aware DatetimeIndex dono support karta hai.
 """
 from __future__ import annotations
 
@@ -42,55 +43,68 @@ import numpy as np
 import pandas as pd
 
 PINE_DEFAULTS: Dict[str, Any] = {
-    "accountCapital": 25000.0,
-    "riskPct": 0.5,
-    "targetRR": 5.0,
-    "slBufferAtr": 0.1,
-    "atrPeriod": 14,
-    "volSmaPeriod": 20,
-    "legOutTrMult": 1.2,
-    "legOutMinTrRatio": 1.0,
-    "hqLegOutTrMult": 2.0,
-    "hqLegInAtrMult": 1.5,
-    "maxBaseAtrMult": 1.0,
-    "maxWickPct": 0.30,
-    "minBaseCountInput": 1,
-    "maxBaseCountInput": 3,
-    "legInMinAtrMult": 1.0,
-    "minClvPct": 0.60,
-    "legInToBaseSizeMult": 2.0,
-    "legInMinBodyPct": 0.60,
-    "useImbalance": True,
-    "maxImbalanceMult": 1.0,
-    "relaxGapCapOvernight": True,
-    "genuineGapBonus": 10,
-    "overnightGapBonus": 15,
-    "rejectOppositeCoverPct": 0.50,
-    "minValidScore": 40,
-    "hqScoreThreshold": 90,
-    "legOutBodyHeavyPct": 0.60,
-    "testedLegOutRetracePct": 1.00,
-    "maxTestedCount": 1,
+    # ================= Pine: original indicator inputs =================
+    "accountCapital": 25000.0,          # "Account Capital"
+    "riskPct": 0.5,                     # "Risk %"
+    "targetRR": 5.0,                    # "Target RR"
+    "slBufferAtr": 0.1,                 # "SL Buffer ATR"
+    "atrPeriod": 14,                    # "ATR Period"
+    "volSmaPeriod": 20,                 # "Volume SMA Period"
+    "legOutTrMult": 1.2,                # "Leg-Out TR Multiplier"
+    "legOutMinTrRatio": 1.0,            # "Leg-Out Min TR Ratio vs Leg-In"
+    "hqLegOutTrMult": 2.0,              # "HQ Leg-Out TR Multiplier"
+    "hqLegInAtrMult": 1.5,              # "HQ Leg-In ATR Multiplier"
+    "maxBaseAtrMult": 1.0,              # "Max Base TR ATR Multiplier"
+    "maxWickPct": 0.30,                 # "Max Wick %"
+    "minBaseCountInput": 1,             # "Min Base Count"
+    "maxBaseCountInput": 3,             # "Max Base Count"
+    "legInMinAtrMult": 1.0,             # "Leg-In Min ATR Multiplier"
+    "minClvPct": 0.60,                  # "Min CLV %"
+    "legInToBaseSizeMult": 2.0,         # "Leg-In to Base Size Multiplier"
+    "legInMinBodyPct": 0.60,            # "Leg-In Min Body %"
+    "useImbalance": True,               # "Use Imbalance"
+    "maxImbalanceMult": 1.0,            # "Max Imbalance vs Leg-In Mult"
+    "relaxGapCapOvernight": True,       # "Relax Gap Cap on Overnight"
+    "genuineGapBonus": 10,              # "Genuine Gap Score Bonus"
+    "overnightGapBonus": 15,            # "Overnight Gap Score Bonus"
+    "rejectOppositeCoverPct": 0.50,     # "Reject Opposite Cover %"
+    "minValidScore": 40,                # "Min Valid Score"
+    "hqScoreThreshold": 90,             # "HQ Score Threshold"
+    "legOutBodyHeavyPct": 0.60,         # "Leg-Out Body Heavy Pressure %"
+    "testedLegOutRetracePct": 1.00,     # "Tested Leg-Out Retrace %"
+    "maxTestedCount": 1,                # "Max Tested Count" (state rule me inert)
 
-    # ---- Pine "PARITY INPUTS" (Pine me bhi inert - sirf config) ----
-    "legOutToLegInBodyMult": 1.0,
-    "baseBoringMaxBodyPct": 0.55,
-    "scanAfterCandleComplete": True,
-    "scanMonthlyOnce": True,
-    "scanWeeklyOnce": True,
-    "scanDailyOnce": True,
-    "enableClosingWickCheck": True,
-    "legInMinClosingWickPct": 0.1,
-    "enableLegOutCoverCheck": True,
-    "legOutMaxCoverPct": 90.0,
-    "enableHQBaseColourCheck": True,
-    "hqBaseColourProbabilityPct": 90.0,
-    "enableWhiteAreaCheck": True,
+    # ================= Pine: parity-only inputs (inert) =================
+    "legOutToLegInBodyMult": 1.0,       # "Leg-Out to Leg-In Body Mult"
+    "baseBoringMaxBodyPct": 0.55,       # "Base Small-Body (Indecision) %"
+    "eodHighBufferPct": 10.0,           # "EOD High Buffer %"
+    "eodLowBufferPct": 10.0,            # "EOD Low Buffer %"
+    "scanAfterCandleComplete": True,    # "Scan After Candle Complete"
+    "scanMonthlyOnce": True,            # "Scan Monthly Once"
+    "scanWeeklyOnce": True,             # "Scan Weekly Once"
+    "scanDailyOnce": True,              # "Scan Daily Once"
+    "enableClosingWickCheck": True,     # "Use Closing-Side Wick Guard"
+    "legInMinClosingWickPct": 0.1,      # "Leg-In Min Closing Wick %"
+    "enableLegOutCoverCheck": True,     # "Use Leg-Out Coverage Guard"
+    "legOutMaxCoverPct": 90.0,          # "Leg-Out Max Cover %"
+    "enableHQBaseColourCheck": True,    # "Use Boring-Colour HQ Flag"
+    "hqBaseColourProbabilityPct": 90.0, # "HQ Base Colour Probability %"
+    "enableWhiteAreaCheck": True,       # "Use White Area Check"
 
-    # ---- SCANNER-ONLY (Pine se ekmaatra antar) ----
-    "eodHighBufferPct": 10.0,
-    "eodLowBufferPct": 10.0,
-    "useEodRange": True,
+    # ================= Pine: MTF / Shadow / Swing inputs =================
+    # Ye Pine me sirf chart display ke liye hain; scanner validation me use nahi hote.
+    "showMTF": True,                    # "Show other-TF proximal lines"
+    "filterDistantMTF": True,           # "Hide distant MTF lines (display only)"
+    "mtfNearPct": 8.0,                  # "Show lines within % of last price"
+    "showShadow": True,                 # "Shadow when prior zone behind / broken / swing broken"
+    "showFlags": True,                  # "Show BASE BREAK / SWING labels"
+    "shadowAtr": 0.08,                  # "Shadow padding x ATR"
+    "swingLeft": 3,                     # "Confirmed swing: bars on left"
+    "swingRight": 3,                    # "Confirmed swing: bars on right"
+    "maxStored": 220,                   # "Max chart zones (boxes <= 500)"
+
+    # ================= SCANNER-ONLY (Pine me nahi) =================
+    "useEodRange": True,                # EOD Range filter; Pine parity ke liye False karein
 }
 
 HARD_MAX_BASE_COUNT = 3
@@ -485,18 +499,10 @@ class ZoneEngine:
             self.active_zones.append(z)
             self.live_zones.append(z)
 
-    # ---------------- 5. STATE TRACKING - NEW RULE -------------------------
-    # OLD RULE (Pine jaisa):
-    #   Fresh -> Tested jab price legOutMidLevel touch kare
-    #   Tested -> Broken jab touchCount > maxTestedCount ya distal toote
-    #
-    # NEW RULE (User requirement):
-    #   Fresh tab tak Fresh rahega jab tak proximal line (proxVal) price
-    #   reversal ke dauran touch na ho.
-    #   Fresh -> Tested jab price proxVal ko chhuye
-    #   Tested tab tak Tested rahega jab tak distal (distVal) na toote
-    #   (maxTestedCount wala break hataya gaya hai, taaki Tested distal
-    #   break tak bana rahe - agar chaho to neeche wala block uncomment kar sakte ho)
+    # ---------------- STATE TRACKING (User rule) ---------------------------
+    # Fresh  -> Tested : price proximal line (proxVal) ko chhuye
+    # Tested -> Broken : sirf distal line (distVal) toote
+    # Fresh  -> Broken : distal seedha toot jaye (proximal touch ke bina)
     # -----------------------------------------------------------------------
     def _update_states(self, i: int) -> None:
         if not self.live_zones:
@@ -507,20 +513,16 @@ class ZoneEngine:
 
             if z.state == "Fresh":
                 if z.isDemand:
-                    # Demand: price neeche aata hai
                     if lo <= z.distVal:
-                        # Distal toot gaya -> direct Broken (proximal touch hue bina bhi)
                         z.state = "Broken"
                         z.breakReason = "distal_break_before_test"
                     elif lo <= z.proxVal:
-                        # Proximal touch hua reversal me -> ab Tested
                         z.state = "Tested"
                         z.touchCount += 1
                         if z.entryBarIndex is None:
                             z.entryBarIndex = i
                             z.entryTimestamp = self.df.index[i]
                 else:
-                    # Supply: price upar jata hai
                     if hi >= z.distVal:
                         z.state = "Broken"
                         z.breakReason = "distal_break_before_test"
@@ -534,11 +536,9 @@ class ZoneEngine:
             elif z.state == "Tested":
                 if z.isDemand:
                     if lo <= z.distVal:
-                        # Distal break -> Broken
                         z.state = "Broken"
                         z.breakReason = "distal_break"
                     elif lo <= z.proxVal:
-                        # Proximal ko dubara touch -> touch count badhao, par Tested hi rahega
                         z.touchCount += 1
                 else:
                     if hi >= z.distVal:
@@ -547,11 +547,7 @@ class ZoneEngine:
                     elif hi >= z.proxVal:
                         z.touchCount += 1
 
-            # --- OLD LOGIC: maxTestedCount se break (ab requirement ke hisab se hataya) ---
-            # User ne kaha: "jab tak distal nahi toot jata tab tak Tested maane"
-            # Isliye ye check ab nahi karna. Agar aapko purana behaviour chahiye
-            # to neeche ke 2 lines uncomment kar do.
-            #
+            # Purana maxTestedCount auto-break (requirement ke hisab se band):
             # if z.state == "Tested" and z.touchCount > self.maxTestedCount:
             #     z.state = "Broken"
             #     z.breakReason = "max_tested_count"
