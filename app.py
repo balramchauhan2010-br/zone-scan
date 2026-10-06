@@ -2067,3 +2067,15 @@ if is_dhan_configured():
                     st.info("No positions")
         except Exception as e:
             st.warning(f"Dhan error (secure, key masked): {e}. App fast mode me chalega.")
+import html
+
+from live_market_updates import (
+    build_allowed_symbol_set,
+    build_event_markers,
+    extract_ltp_map,
+    fetch_nse_block_bulk_deals,
+    filter_news_to_universe,
+    merge_latest_notifications,
+    normalize_symbol,
+    zone_state_label,
+)
