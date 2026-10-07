@@ -20,6 +20,14 @@ Features:
        ko top se hata kar page ke BOTTOM me, ek COLLAPSED expander ke andar shift kar diya gaya hai
 - NEW: Validated page par Engine selector -- v1 (purana) ya v2 (naye niyam: leg-out complete +
        envelope + half-TF, pulse/trend hataye hue). v2 ke liye repo me zone_core_validation_v2.py chahiye.
+- CLEAN DASHBOARD (naya): dashboard se Nearest-Zone Filter ka caption aur "Table Sorting / Grouping"
+       section (heading + radio) hata diya -- sorting ab Settings (⚙️) popover ke "🔃 Table Sorting / Grouping"
+       me hai, aur filter ki last-scan info wahi popover me caption bankar dikhti hai. Dono pages clean.
+- PINE PARITY (naya): main scan ke intraday frames ab Pine/TradingView jaisa session rakhte hain --
+   zone_core.py ka trim_out_of_session_bars() session ke bahar ki CAS/auction candle (post-03-Aug-2026
+   F&O stocks me 15:15 ki candle) hata deta hai, isliye INFY 2H (Entry 992.70/SL 979.32) jaisa
+   ghost zone scanner me nahi aata (TV/Pine chart par aisa zone hota hi nahi). Repo me naya zone_core.py
+   chahiye; na milne par ye step chup-chaap skip ho jata hai (purana behaviour).
 
 Security:
 - st.secrets se pehle try, phir env var, phir None (crash nahi)
@@ -336,6 +344,10 @@ with settings_pop:
         "Ek symbol ke max zones (0 = unlimited)", 0, 10, 2, 1, key="prox_per_symbol",
         help="2 = हर symbol के सिर्फ़ 2 सबसे नज़दीकी zone, ताकि एक symbol पूरी जगह न घेरे और बाकी symbols के नज़दीकी zone दिखें। 0 = कोई limit नहीं।",
     )
+    # Dashboard par ye caption nahi dikhta (clean rakhne ke liye) - last scan ki info yahan
+    _pfi = st.session_state.get("prox_filter_info")
+    if _pfi:
+        st.caption(f"📍 Last scan: {_pfi[0]} zones me se {_pfi[1]} nazdeek/valid zone dikhaye gaye")
 
     with st.expander("📐 EOD Range Filter", expanded=False):
         eod_advanced = st.checkbox("Advanced: alag High/Low %", value=False, key="eod_adv")
@@ -401,6 +413,16 @@ with settings_pop:
             v2_half_missing = st.selectbox("Half data na mile to?", ["skip (zone rakho)", "reject (zone hatao)"], index=0, key="v2_half_missing")
             v2_assume_live = st.checkbox("Last bar ko live maano (forming candle)", value=False, key="v2_live")
             st.caption("Asar (50 stocks backtest): half-TF akele 10% zones kaatta hai; envelope dono-taraf 96% kaat deta hai - isliye stop-side OFF rakho.")
+
+    st.markdown("---")
+    st.subheader("🔃 Table Sorting / Grouping")
+    st.caption("Dashboard par heading/radio nahi dikhte (page clean rahe) - sorting yahan se set karo. Dono pages par yahi lagti hai, sirf display order badalta hai.")
+    sort_choice = st.radio(
+        "Zones ko kaise dikhayein?",
+        ["📍 Distance % (Nearest First)", "🔤 Symbol A→Z ↑", "🔤 Symbol Z→A ↓", "🗂️ Symbol Grouped (A-Z)"],
+        index=0, key="sort_choice",
+        help="Distance % = sab symbols milakar sabse nazdeek zone pehle | Grouped = ek symbol ke saare TF ek saath",
+    )
 
     st.markdown("---")
     st.subheader("🚀 Scan Controls")
@@ -586,6 +608,35 @@ BASE_LABELS = {"1m": "1m", "5m": "5m", "15m": "15m", "60m": "1H (60m)", "daily":
 BASE_BUCKET_TF = {"1m": "1m", "5m": "5m", "15m": "15m", "60m": "1H", "daily": "Daily"}
 BASE_FETCHERS = {"1m": cached_fetch_1m, "5m": cached_fetch_5m, "15m": cached_fetch_15m, "60m": cached_fetch_60m, "daily": cached_fetch_daily}
 
+# ---------- Pine/TV parity: intraday frames se CAS/auction candle hataao ----------
+# NSE me 03-Aug-2026 se F&O stocks (poore Nifty 50) ka continuous session 09:15-15:15 hai;
+# 15:15 ke baad sirf Closing Auction print aata hai. Yahoo us print ko 15:15 ki alag
+# candle banata hai, aur frame builder usse poora TF candle maan leta hai -> aisa zone
+# ban jaata hai jo TradingView/Pine ke chart par hota hi nahi (jaise INFY 2H 992.70).
+# zone_core.trim_out_of_session_bars() usi candle ko hataata hai. zone_core.py na mile
+# to ye step chup-chaap skip ho jaata hai (purana behaviour).
+try:
+    import zone_core as zc_core
+    ZC_CORE_AVAILABLE = True
+except Exception:
+    zc_core = None
+    ZC_CORE_AVAILABLE = False
+
+PINE_ALIGN_TFS = {"1m", "3m", "5m", "10m", "15m", "30m", "75m", "1H", "2H", "4H", "6H"}
+
+
+def pine_align_frames(tf, frames):
+    """Intraday frames ko Pine/TradingView session ke hisaab se align karo."""
+    if not ZC_CORE_AVAILABLE or not frames or tf not in PINE_ALIGN_TFS:
+        return frames
+    out = {}
+    for sym, frame in frames.items():
+        try:
+            out[sym] = zc_core.trim_out_of_session_bars(frame) if frame is not None and len(frame) else frame
+        except Exception:
+            out[sym] = frame
+    return out
+
 
 @st.cache_data(show_spinner=False, ttl=6 * 3600)
 def cached_scan(tf, bk, pt, tt, stt):
@@ -593,6 +644,7 @@ def cached_scan(tf, bk, pt, tt, stt):
     base = scanner.base_dataset_for_tf(tf)
     raw_by_base = {base: BASE_FETCHERS[base](cc.last_closed_bucket(BASE_BUCKET_TF[base]), tt)}
     frames = scanner.build_timeframe_frames(tf, raw_by_base)
+    frames = pine_align_frames(tf, frames)
     return scanner.scan_universe(tf, frames, params, states=list(stt)), frames
 
 
@@ -676,6 +728,7 @@ def cached_validated_scan(tf, bk, pt, tt, stt):
     base = scanner.base_dataset_for_tf(tf)
     raw_by_base = {base: BASE_FETCHERS[base](cc.last_closed_bucket(BASE_BUCKET_TF[base]), tt)}
     frames = scanner.build_timeframe_frames(tf, raw_by_base)
+    frames = pine_align_frames(tf, frames)
     df, funnel = scan_validated_universe(tf, frames, params, states=list(stt))
     return df, funnel, frames
 
@@ -798,6 +851,7 @@ def cached_validated_scan_v2(tf, bk, pt, tt, stt):
     base = scanner.base_dataset_for_tf(tf)
     raw_by_base = {base: BASE_FETCHERS[base](cc.last_closed_bucket(BASE_BUCKET_TF[base]), tt)}
     frames = scanner.build_timeframe_frames(tf, raw_by_base)
+    frames = pine_align_frames(tf, frames)
     half_frames = {}
     if ZCV2_AVAILABLE:
         half_base = V2_HALF_SOURCE.get(tf, ("", base))[1]
@@ -1076,6 +1130,24 @@ def apply_proximity_filter(df, max_dist_pct=5.0, per_symbol_cap=2):
         out = out.groupby("Ticker", sort=False).head(int(per_symbol_cap))
 
     return out.drop(columns=["_abs_dist"]).reset_index(drop=True)
+
+
+def _apply_sort_choice(df, choice):
+    """Settings (⚙️) popover ki "Table Sorting / Grouping" choice lagao (display-only)."""
+    if df is None or df.empty:
+        return df
+    choice = str(choice or "")
+    if "A→Z" in choice and "Z→A" not in choice:
+        return df.sort_values("Ticker", ascending=True, kind="stable")
+    if "Z→A" in choice:
+        return df.sort_values("Ticker", ascending=False, kind="stable")
+    if "Grouped" in choice:
+        out = df.copy()
+        out["_tf_min"] = out["Timeframe"].apply(lambda x: scanner.tf_minutes(x))
+        return out.sort_values(["Ticker", "_tf_min"], ascending=[True, True]).drop(columns=["_tf_min"])
+    if "Distance" in choice and "Distance %" in df.columns:
+        return df.sort_values("Distance %", key=lambda s: s.abs(), kind="stable")
+    return df
 
 
 @st.cache_data(show_spinner=False, ttl=6 * 3600)
@@ -1447,27 +1519,15 @@ if "Main" in st.session_state.app_page:
         if view_tfs:
             combined = combined[combined["Timeframe"].isin(view_tfs)]
 
-    # ---------- NEW: Nearest-Zone Filter apply ----------
+    # ---------- Nearest-Zone Filter apply (caption Settings popover me dikhta hai) ----------
     if prox_enable and not combined.empty:
         _before = len(combined)
         combined = apply_proximity_filter(combined, prox_max_dist, prox_per_symbol)
-        st.caption(f"📍 Nearest-Zone Filter: {_before} zones me se {len(combined)} nazdeek/valid zones dikh rahe hain (≤ {prox_max_dist}% door, ek symbol ke max {prox_per_symbol if prox_per_symbol else 'unlimited'} zone, toote zone hide)")
+        st.session_state["prox_filter_info"] = (_before, len(combined))
 
+    # ---------- Sorting/Grouping Settings (⚙️) popover se aata hai (dashboard par heading/radio nahi) ----------
     if not combined.empty:
-        st.markdown("#### 🔃 Table Sorting / Grouping (Display Only)")
-        sort_option = st.radio("Symbol ko kaise dikhana hai?", ["Distance % (Nearest First - All Symbols)", "Symbol A→Z ↑ (Ascending)", "Symbol Z→A ↓ (Descending)", "Symbol Grouped (ek Symbol ke saare TF ek saath, A-Z)"], index=0, horizontal=True)
-        if sort_option == "Symbol A→Z ↑ (Ascending)":
-            combined = combined.sort_values("Ticker", ascending=True)
-        elif sort_option == "Symbol Z→A ↓ (Descending)":
-            combined = combined.sort_values("Ticker", ascending=False)
-        elif "Grouped" in sort_option and "A-Z" in sort_option:
-            combined["_tf_min"] = combined["Timeframe"].apply(lambda x: scanner.tf_minutes(x))
-            combined = combined.sort_values(["Ticker", "_tf_min"], ascending=[True, True])
-            combined = combined.drop(columns=["_tf_min"])
-        else:
-            # Default: sab symbols milakar sabse nazdeek zone pehle
-            if "Distance %" in combined.columns:
-                combined = combined.sort_values("Distance %", key=lambda s: s.abs(), kind="stable")
+        combined = _apply_sort_choice(combined, globals().get("sort_choice"))
 
     merged_frames = {}
     for tf_frames in all_frames_store.values():
@@ -1679,26 +1739,15 @@ else:
         if view_tfs_v:
             combined_v = combined_v[combined_v["Timeframe"].isin(view_tfs_v)]
 
-    # ---------- NEW: Nearest-Zone Filter apply (Validated) ----------
+    # ---------- Nearest-Zone Filter apply (Validated) - caption Settings popover me ----------
     if prox_enable and not combined_v.empty:
         _before_v = len(combined_v)
         combined_v = apply_proximity_filter(combined_v, prox_max_dist, prox_per_symbol)
-        st.caption(f"📍 Nearest-Zone Filter: {_before_v} zones me se {len(combined_v)} nazdeek/valid zones dikh rahe hain (≤ {prox_max_dist}% door, ek symbol ke max {prox_per_symbol if prox_per_symbol else 'unlimited'} zone)")
+        st.session_state["prox_filter_info"] = (_before_v, len(combined_v))
 
+    # ---------- Sorting/Grouping Settings (⚙️) popover se (dashboard par heading/radio nahi) ----------
     if not combined_v.empty:
-        st.markdown("#### 🔃 Validated Table Sorting / Grouping")
-        sort_option_v = st.radio("Validated zones ko kaise dikhana hai?", ["Distance % (Nearest First - All Symbols)", "Symbol A→Z ↑", "Symbol Z→A ↓", "Symbol Grouped (A-Z)"], index=0, horizontal=True, key="sort_validated")
-        if sort_option_v == "Symbol A→Z ↑":
-            combined_v = combined_v.sort_values("Ticker", ascending=True)
-        elif sort_option_v == "Symbol Z→A ↓":
-            combined_v = combined_v.sort_values("Ticker", ascending=False)
-        elif "Grouped" in sort_option_v:
-            combined_v["_tf_min"] = combined_v["Timeframe"].apply(lambda x: scanner.tf_minutes(x))
-            combined_v = combined_v.sort_values(["Ticker", "_tf_min"], ascending=[True, True])
-            combined_v = combined_v.drop(columns=["_tf_min"])
-        else:
-            if "Distance %" in combined_v.columns:
-                combined_v = combined_v.sort_values("Distance %", key=lambda s: s.abs(), kind="stable")
+        combined_v = _apply_sort_choice(combined_v, globals().get("sort_choice"))
 
     merged_frames_v = {}
     for tf_frames in all_frames_valid.values():
