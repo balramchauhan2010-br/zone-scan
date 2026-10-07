@@ -14,6 +14,8 @@ Features:
 - CLEAN TOP: main/validated page ke top se Mode info box, Fast Open warning, scan buttons,
        auto-refresh caption aur scan status box hata diye -- ye sab Settings (⚙️) popover ke
        "Scan Controls" + "Auto-Refresh" me hain. Scan chupchap (silent) chalta hai.
+- NO EMPTY GAP: market tape ke saath koi alag badge block/divider nahi (macro badges usi row me),
+       aur auto-refresh ka call page ke BOTTOM me -- chips row ke neeche khaali space nahi banti.
 - CHANGED: "LIVE: Important Market News / Events" + "Top Market News / Events" (3-in-1)
        ko top se hata kar page ke BOTTOM me, ek COLLAPSED expander ke andar shift kar diya gaya hai
 - NEW: Validated page par Engine selector -- v1 (purana) ya v2 (naye niyam: leg-out complete +
@@ -424,6 +426,11 @@ with settings_pop:
         "Auto-Refresh ON (candle close par)", value=st.session_state.get("auto_refresh_enabled", True),
         key="auto_refresh_toggle", help="Chhote TF ki candle band hone par page khud refresh hota hai")
     _nc = st.session_state.get("next_close_info")
+    if _nc is None:
+        try:
+            _nc = get_next_candle_close_info(tf_selected)
+        except Exception:
+            _nc = None
     if st.session_state.auto_refresh_enabled and _nc:
         st.caption(f"⏳ Agla refresh: {_nc[0]} candle close in {_nc[1] // 60}m {_nc[1] % 60}s")
     elif not st.session_state.auto_refresh_enabled:
@@ -1012,7 +1019,17 @@ def render_market_watch():
     except Exception:
         pass
 
-    st.markdown("".join(chips), unsafe_allow_html=True)
+    # Global macro badges bhi isi block me (jahan mile tab) -- alag block se khaali gap banta tha
+    gm_extra = ""
+    try:
+        if GLOBAL_AVAILABLE:
+            from global_macro_fetcher import global_macro_badge_html
+            gm_extra = str(global_macro_badge_html() or "")
+    except Exception:
+        gm_extra = ""
+    combined_tape = "".join(chips) + gm_extra
+    if combined_tape.strip():
+        st.markdown(combined_tape, unsafe_allow_html=True)
 
 
 def apply_display_filters(df):
@@ -1153,36 +1170,11 @@ def cached_macro_news():
 # Render top tape
 render_market_watch()
 
-# ---------- Auto Refresh on Candle Close (koi caption/status box nahi - info popover me) ----------
-try:
-    selected_tfs_for_refresh = []
-    try:
-        selected_tfs_for_refresh = tf_selected if 'tf_selected' in globals() else ["15m", "30m", "1H"]
-    except Exception:
-        selected_tfs_for_refresh = ["15m", "30m", "1H"]
-    next_tf, next_sec = get_next_candle_close_info(selected_tfs_for_refresh)
-    if next_tf and next_sec and next_sec < 3600:
-        st.session_state["next_close_info"] = (next_tf, next_sec)
-        if st.session_state.get("auto_refresh_enabled", True):
-            try:
-                from streamlit_autorefresh import st_autorefresh
-                st_autorefresh(interval=(next_sec + 5) * 1000, key=f"candle_close_{next_tf}")
-            except ImportError:
-                pass
-except Exception:
-    pass
+# (Auto-Refresh ka call page ke neeche hai - top area me khaali space na bane)
 
-# Global macro badges
-try:
-    if GLOBAL_AVAILABLE:
-        from global_macro_fetcher import global_macro_badge_html
-        gm_html = global_macro_badge_html()
-        if gm_html:
-            st.markdown(gm_html, unsafe_allow_html=True)
-except Exception:
-    pass
 
-st.markdown("---")
+# (Global macro badges ab market tape ke saath hi render hote hain - alag block/divider nahi,
+#  taki chips row aur table ke beech khaali space na bane)
 
 
 def _breadth_and_fii_badges(badges):
@@ -2140,3 +2132,23 @@ with st.expander("🔴 LIVE: Important Market News / Events - Hindi + AI Summary
     except Exception as _e:
         st.warning(f"Top Market News section error: {_e} - Scanner fast चल रहा है")
 # ==================== /MOVED + COLLAPSED SECTION ====================
+
+
+# ---------- Auto Refresh on Candle Close (page ke BOTTOM me - top par koi gap nahi) ----------
+try:
+    selected_tfs_for_refresh = []
+    try:
+        selected_tfs_for_refresh = tf_selected if 'tf_selected' in globals() else ["15m", "30m", "1H"]
+    except Exception:
+        selected_tfs_for_refresh = ["15m", "30m", "1H"]
+    next_tf, next_sec = get_next_candle_close_info(selected_tfs_for_refresh)
+    if next_tf and next_sec and next_sec < 3600:
+        st.session_state["next_close_info"] = (next_tf, next_sec)
+        if st.session_state.get("auto_refresh_enabled", True):
+            try:
+                from streamlit_autorefresh import st_autorefresh
+                st_autorefresh(interval=(next_sec + 5) * 1000, key=f"candle_close_{next_tf}")
+            except ImportError:
+                pass
+except Exception:
+    pass
