@@ -11,6 +11,10 @@ Features:
 - 2 Pages: Main Scanner + Validated Zones (Second Page)
 - NEW: Nearest-Zone Filter (toot chuke zone hide, door ke zone hide, nazdeek ka zone pehle,
        ek symbol ke zone puri jagah na gher sake)
+- CHANGED: "LIVE: Important Market News / Events" + "Top Market News / Events" (3-in-1)
+       ko top se hata kar page ke BOTTOM me, ek COLLAPSED expander ke andar shift kar diya gaya hai
+- NEW: Validated page par Engine selector -- v1 (purana) ya v2 (naye niyam: leg-out complete +
+       envelope + half-TF, pulse/trend hataye hue). v2 ke liye repo me zone_core_validation_v2.py chahiye.
 
 Security:
 - st.secrets se pehle try, phir env var, phir None (crash nahi)
@@ -38,6 +42,13 @@ try:
     ZCV_AVAILABLE = True
 except ImportError:
     ZCV_AVAILABLE = False
+
+# v2 Validation module (NEW: leg-out complete + envelope + half-TF niyam, pulse/trend hataye hue)
+try:
+    import zone_core_validation_v2 as zcv2
+    ZCV2_AVAILABLE = True
+except ImportError:
+    ZCV2_AVAILABLE = False
 
 # Secure config helpers (optional files, fallback inline)
 try:
@@ -355,8 +366,54 @@ with settings_pop:
         v_show_only_valid = st.checkbox("Show only Valid Demand/Supply (Rule5)", value=True)
         v_show_only_aligned_display = st.checkbox("Display me sirf Aligned", value=False)
 
+    with st.expander("🧩 Engine (Validated Page) - v1 ya v2?", expanded=False):
+        if ZCV2_AVAILABLE:
+            engine_choice = st.radio(
+                "Validated page kaunsa engine use kare?",
+                ["v1 (purana: pulse/trend + engulf rules)", "v2 (naye niyam: leg-out complete + envelope + half-TF)"],
+                index=0,
+                help="v2 me pulse/trend ke saare rules hata diye gaye hain; zone sirf leg-out candle complete hone par valid hota hai, "
+                     "aur envelope (entry+SL+target) + half time-frame check lagta hai. v2 ke liye repo me zone_core_validation_v2.py hona chahiye.",
+            )
+        else:
+            engine_choice = "v1 (purana: pulse/trend + engulf rules)"
+            st.info("○ zone_core_validation_v2.py nahi mila - sirf v1 engine available hai. v2 use karne ke liye ye file repo me upload karo.")
+
+        use_v2 = engine_choice.startswith("v2")
+        if use_v2:
+            st.markdown("**v2 Rules (naye niyam)**")
+            v2_target_rr = st.number_input("v2 Target RR (min 1:1)", min_value=1.0, max_value=8.0, value=3.0, step=0.5, key="v2_target_rr",
+                                           help="1:2 ya 1:3 - targetRR ke hisaab se legOutRR/HQ checks chalte hain. Backtest me charges ke liye 1:2/1:1 behtar nikla hai.")
+            v2_env = st.checkbox("Envelope niyam ON (entry+SL+target leg-out ke andar)", value=True, key="v2_env")
+            v2_env_rr = st.number_input("Envelope RR (target kis RR tak check ho)", min_value=1.0, max_value=8.0, value=float(v2_target_rr), step=0.5, key="v2_env_rr")
+            v2_env_stop = st.checkbox("Stop-side bhi block ke andar ho (strict)", value=False, key="v2_env_stop",
+                                      help="OFF = sirf target-side check (backtest me yahi practical nikla: 377 zones vs 37), ON = dono taraf (bahut kam zones).")
+            v2_env_target = st.checkbox("Target-side check ON", value=True, key="v2_env_target")
+            v2_cont = st.slider("Continuation candles (single candle me na aaye to)", 1, 3, 3, key="v2_cont")
+            st.markdown("**v2 Half Time-Frame Check**")
+            v2_half = st.checkbox("Half-TF check ON (mid-line break = invalid)", value=True, key="v2_half")
+            v2_half_pct = st.slider("Half-TF min aligned share", 0.0, 1.0, 0.50, 0.05, key="v2_half_pct")
+            v2_half_missing = st.selectbox("Half data na mile to?", ["skip (zone rakho)", "reject (zone hatao)"], index=0, key="v2_half_missing")
+            v2_assume_live = st.checkbox("Last bar ko live maano (forming candle)", value=False, key="v2_live")
+            st.caption("Asar (50 stocks backtest): half-TF akele 10% zones kaatta hai; envelope dono-taraf 96% kaat deta hai - isliye stop-side OFF rakho.")
+
     with st.expander("🗄️ Cache / Refresh", expanded=False):
         force_rescan = st.button("🔄 Force Rescan (bypass cache)", width="stretch")
+
+# v2 options ke safe defaults (agar v2 select nahi hai to bhi variables defined rahein)
+if "use_v2" not in dir():
+    use_v2 = False
+if not use_v2:
+    v2_target_rr = float(target_rr)
+    v2_env = True
+    v2_env_rr = float(target_rr)
+    v2_env_stop = False
+    v2_env_target = True
+    v2_cont = 3
+    v2_half = True
+    v2_half_pct = 0.50
+    v2_half_missing = "skip (zone rakho)"
+    v2_assume_live = False
 
 # Cached fetchers
 # ROBUST price source: Dhan if connected (fast real-time) else Yahoo Finance (app band nahi hoga)
@@ -584,6 +641,140 @@ def cached_validated_scan(tf, bk, pt, tt, stt):
     return df, funnel, frames
 
 
+# ==================== v2 ENGINE (naye niyam) - Validated Page ====================
+# zone TF -> (aadha TF, half banane ke liye kaun sa base dataset chahiye)
+V2_HALF_SOURCE = {
+    "15m": ("5m", "5m"), "30m": ("15m", "15m"), "75m": ("30m", "15m"), "1H": ("30m", "15m"),
+    "2H": ("1H", "60m"), "4H": ("2H", "60m"), "6H": ("3H", "60m"), "1D": ("3H", "60m"),
+    "1W": ("2D", "daily"), "1M": ("2W", "daily"),
+}
+# half TF -> (bucket minutes, min_fill) - wahi algorithm jo backtest me tha (NSE 09:15 anchor)
+V2_HALF_MINUTES = {"5m": (5, 0.9), "15m": (15, 0.9), "30m": (30, 0.6), "1H": (60, 0.9), "2H": (120, 0.9), "3H": (180, 0.9)}
+
+
+def _build_v2_half_frame(tf: str, df_base):
+    """v2 engine ke liye half time-frame (naive IST index). 2D/2W daily se, baaki session-resample se."""
+    if df_base is None or len(df_base) == 0:
+        return pd.DataFrame()
+    half_name = zcv2.half_timeframe_of(tf)
+    if half_name in ("2D", "2W"):
+        return zcv2.build_half_dataframe(tf, df_base=df_base)
+    spec = V2_HALF_MINUTES.get(half_name)
+    if spec is None:
+        return pd.DataFrame()
+    minutes, min_fill = spec
+    try:
+        return zcv2.session_resample(zcv2.to_naive_ist(df_base), minutes, min_fill)
+    except Exception:
+        return pd.DataFrame()
+
+
+def scan_validated_universe_v2(tf: str, frames: dict, params: dict, states=None, half_frames=None):
+    """v2 engine se validated zones: leg-out complete + envelope + half-TF niyam.
+    Note: v2 me pulse/trend niyam hata diye gaye hain, isliye Pulse/Trend columns 0 aur Aligned=True (N/A) rahenge.
+    """
+    if not ZCV2_AVAILABLE:
+        return pd.DataFrame(), {}
+    states = states or ["Fresh", "Tested"]
+    rows = []
+    stats_agg = {}
+    half_frames = half_frames or {}
+    for symbol, df in frames.items():
+        if df is None or len(df) < 25:
+            continue
+        try:
+            half = half_frames.get(symbol)
+            engine = zcv2.ZoneEngine(
+                zcv2.to_naive_ist(df),
+                half_df=(zcv2.to_naive_ist(half) if half is not None and len(half) else None),
+                half_tf_name=zcv2.half_timeframe_of(tf),
+                **params,
+            )
+            zones = engine.run()
+            for k, v in getattr(engine, "stats", {}).items():
+                stats_agg[k] = stats_agg.get(k, 0) + v
+            active = [z for z in zones if z.state in states]
+            if not active:
+                continue
+            curr_price = float(df["close"].iloc[-1])
+            last_bar = df.index[-1]
+            for z in active:
+                dist = curr_price - z.proxVal
+                dist_pct = (dist / curr_price * 100.0) if curr_price else float("nan")
+                risk = abs(z.proxVal - z.slVal)
+                rew = abs(z.tpVal - z.proxVal)
+                rr = rew / risk if risk else float("nan")
+                half_align = float(getattr(z, "halfAlignedPct", float("nan")))
+                rows.append({
+                    "Symbol": chart_url(symbol, tf=tf),
+                    "Timeframe": tf,
+                    "Ticker": symbol,
+                    "Direction": "DEMAND (Buy Zone)" if z.isDemand else "SUPPLY (Sell Zone)",
+                    "Pattern": z.patternType,
+                    "State": z.state,
+                    "Fresh?": z.isFresh,
+                    "Entry (Proximal)": round(z.proxVal, 2),
+                    "Stop Loss (Distal+Buffer)": round(z.slVal, 2),
+                    "Target (RR set)": round(z.tpVal, 2),
+                    "Risk:Reward": round(rr, 2) if np.isfinite(rr) else float("nan"),
+                    "Current Price": round(curr_price, 2),
+                    "Distance %": round(dist_pct, 2),
+                    "LegOut RR": round(z.legOutRR, 2) if np.isfinite(z.legOutRR) else float("nan"),
+                    "RR>=3?": z.legOutPassesRR,
+                    "Engulf OK": z.engulfOK,
+                    "Valid?": (z.validDemand if z.isDemand else z.validSupply),
+                    "Rule1(RBR)": z.rule1OK,
+                    "Rule2(DBD)": z.rule2OK,
+                    "Rule3(DBR)": z.rule3OK,
+                    "Rule4(RBD)": z.rule4OK,
+                    "Pulse": 0,
+                    "Trend": 0,
+                    "Aligned?": True,
+                    "Pulse Rule": "",
+                    "Trend Rule": "",
+                    "HQ Zone": z.isHQ,
+                    "Score": z.densityScore,
+                    "Touch Count": z.touchCount,
+                    "Zone Created": z.timestamp,
+                    "Last Bar Time": last_bar,
+                    "Envelope OK": bool(getattr(z, "envelopeOK", False)),
+                    "Block Candles": int(getattr(z, "blockCandles", 1)),
+                    "Half TF": str(getattr(z, "halfTF", "")),
+                    "Half OK": bool(getattr(z, "halfOK", True)),
+                    "Half Aligned %": round(half_align, 2) if np.isfinite(half_align) else float("nan"),
+                })
+        except Exception:
+            continue
+    cols = ["Symbol", "Timeframe", "Ticker", "Direction", "Pattern", "State", "Fresh?", "Entry (Proximal)", "Stop Loss (Distal+Buffer)", "Target (RR set)", "Risk:Reward", "Current Price", "Distance %", "LegOut RR", "RR>=3?", "Engulf OK", "Valid?", "Rule1(RBR)", "Rule2(DBD)", "Rule3(DBR)", "Rule4(RBD)", "Pulse", "Trend", "Aligned?", "Pulse Rule", "Trend Rule", "HQ Zone", "Score", "Touch Count", "Zone Created", "Last Bar Time", "Envelope OK", "Block Candles", "Half TF", "Half OK", "Half Aligned %"]
+    if not rows:
+        return pd.DataFrame(columns=cols), stats_agg
+    out = pd.DataFrame(rows)[cols]
+    out = out.sort_values("Distance %", key=lambda s: s.abs())
+    return out.reset_index(drop=True), stats_agg
+
+
+@st.cache_data(show_spinner=False, ttl=6 * 3600)
+def cached_validated_scan_v2(tf, bk, pt, tt, stt):
+    params = dict(pt)
+    base = scanner.base_dataset_for_tf(tf)
+    raw_by_base = {base: BASE_FETCHERS[base](cc.last_closed_bucket(BASE_BUCKET_TF[base]), tt)}
+    frames = scanner.build_timeframe_frames(tf, raw_by_base)
+    half_frames = {}
+    if ZCV2_AVAILABLE:
+        half_base = V2_HALF_SOURCE.get(tf, ("", base))[1]
+        try:
+            half_raw = BASE_FETCHERS[half_base](cc.last_closed_bucket(BASE_BUCKET_TF[half_base]), tt)
+        except Exception:
+            half_raw = {}
+        for sym in frames:
+            try:
+                half_frames[sym] = _build_v2_half_frame(tf, half_raw.get(sym))
+            except Exception:
+                half_frames[sym] = pd.DataFrame()
+    df, stats = scan_validated_universe_v2(tf, frames, params, states=list(stt), half_frames=half_frames)
+    return df, stats, frames
+
+
 params_main = dict(targetRR=float(target_rr), eodHighBufferPct=float(eod_high_pct), eodLowBufferPct=float(eod_low_pct), enableClosingWickCheck=bool(en_wick), enableLegOutCoverCheck=bool(en_cover), enableHQBaseColourCheck=bool(en_hq), enableWhiteAreaCheck=bool(en_white))
 params_main_tuple = tuple(sorted(params_main.items()))
 states_tuple = tuple(state_filter) if state_filter else ("Fresh", "Tested")
@@ -604,9 +795,30 @@ if preset_choice != "custom":
     params_valid.update(base_preset)
 params_valid_tuple = tuple(sorted(params_valid.items()))
 
+# ---------- v2 engine ke params (Validated page - naye niyam) ----------
+params_valid_v2 = dict(params_valid)
+params_valid_v2.update(dict(
+    targetRR=float(v2_target_rr),
+    requireCompletedLegOut=True,
+    assumeLastBarLive=bool(v2_assume_live),
+    requireEnvelopeInLegOut=bool(v2_env),
+    envelopeRR=float(v2_env_rr),
+    envelopeCheckStopSide=bool(v2_env_stop),
+    envelopeCheckTargetSide=bool(v2_env_target),
+    legOutContinuationCandles=int(v2_cont),
+    requireHalfTfCheck=bool(v2_half),
+    halfTfMinAlignedPct=float(v2_half_pct),
+    halfDataMissingPolicy=("skip" if str(v2_half_missing).startswith("skip") else "reject"),
+))
+params_valid_v2_tuple = tuple(sorted(params_valid_v2.items()))
+
 if force_rescan:
     cached_scan.clear()
     cached_validated_scan.clear()
+    try:
+        cached_validated_scan_v2.clear()
+    except Exception:
+        pass
     cached_fetch_1m.clear()
     cached_fetch_5m.clear()
     cached_fetch_15m.clear()
@@ -931,170 +1143,6 @@ try:
 except Exception:
     pass
 
-# ---------- Top Market News / Events ----------
-try:
-    st.markdown("### 🔴 LIVE: Important Market News / Events - Current Notification (Last 1 Hour Fresh)")
-    try:
-        from powerful_news_fetcher import get_verified_news_with_gemini_layers
-        verified_news_df = get_verified_news_with_gemini_layers()
-        if verified_news_df is not None and not verified_news_df.empty:
-            for idx, row in verified_news_df.head(3).iterrows():
-                title = str(row.get("title", ""))[:120]
-                source = str(row.get("source", ""))
-                confidence = str(row.get("confidence", "Medium"))
-                symbol = str(row.get("symbol", "MARKET"))
-                hindi_title = title
-                try:
-                    if is_gemini_configured():
-                        from gemini_analyzer import quick_hindi_translate
-                        hindi_title = quick_hindi_translate(title)
-                except Exception:
-                    pass
-                bg = "#ea394322" if confidence == "High" else "#f0b90b22" if confidence == "Medium" else "#2a2a2a"
-                border = "#ea3943" if confidence == "High" else "#f0b90b" if confidence == "Medium" else "#444"
-                st.markdown(f"<div style='background:{bg};border:1px solid {border};border-radius:8px;padding:8px 12px;margin:6px 0;'><b style='color:#f0b90b;'>🔴 {symbol}</b> <span style='color:#eaeaea;'>{hindi_title}</span><br><small style='color:#888;'>Source: {source} | Confidence: {confidence} | {row.get('date', '')}</small></div>", unsafe_allow_html=True)
-        else:
-            st.markdown("<div style='background:#2a2a2a;border:1px solid #444;border-radius:8px;padding:8px 12px;margin:6px 0;'><b style='color:#f0b90b;'>NIFTY</b> - Market live, no major news in last 1 hour<br><small style='color:#888;'>Source: NSE + StockEdge | Fresh: Last 1 Hour Checked</small></div>", unsafe_allow_html=True)
-    except Exception as e:
-        print(f"Top notification inner error (safe fallback): {e}")
-        st.markdown("<div style='background:#2a2a2a;border:1px solid #444;border-radius:8px;padding:8px 12px;margin:6px 0;'><b style='color:#f0b90b;'>MARKET</b> - Live market data loading...<br><small>News: Checking fresh 1 hour trending (if fails, app still works)</small></div>", unsafe_allow_html=True)
-except Exception as _e:
-    print(f"Top notification outer safe error: {_e}")
-    st.markdown("### 📰 Top Market News / Events")
-    st.caption("News loading... (app fast, no white screen)")
-
-
-# Detailed Top Market News / Events popover
-try:
-    top_news_pop = st.popover("📰 Top Market News / Events - Hindi + AI Hypothesis + Global Impact (Touch to view) - 3 in 1 - Fresh 1H Only", help="Market ki important news ka headline dikhe, khole to Gemini AI kai sources se ek me samjhaye + global market data + event impact")
-    with top_news_pop:
-        st.subheader("📰 Top Current News - Gemini Multi-Source Summary + Global Market Data + Event Impact (3 in 1, No Links)")
-        st.caption("News headline + Gemini AI kai sources ke news se ek me summary + Global market current data + Us stock par event ka short impact")
-
-        tab_summary, tab_global, tab_impact = st.tabs(["🇮🇳 News Summary (Gemini Multi-Source)", "🌐 Global Market Data Current", "📊 Event Impact on Stocks (Short)"])
-
-        with tab_summary:
-            st.markdown("**🔥 Gemini AI - Kai Sources ke News se Ek Me Samjhaya (Hindi)**")
-            st.caption("Moneycontrol + ET Markets + Google News + NSE + BSE - sab sources se ek hi news ka combined summary")
-            try:
-                from powerful_news_fetcher import get_verified_news_with_gemini_layers
-                verified_df = get_verified_news_with_gemini_layers()
-                if not verified_df.empty:
-                    for _, row in verified_df.head(8).iterrows():
-                        title = row.get("title", "")
-                        desc = row.get("desc", "")[:200]
-                        source = row.get("source", "")
-                        symbol = row.get("symbol", "")
-                        confidence = row.get("confidence", "Medium")
-                        cross_verified = row.get("cross_verified", False)
-                        gemini_summary = ""
-                        if is_gemini_configured() and row.get("gemini_reason_hindi"):
-                            gemini_summary = row.get("gemini_reason_hindi", "")
-                        elif is_gemini_configured():
-                            try:
-                                from gemini_analyzer import get_gemini_hypothesis_for_news
-                                hypo = get_gemini_hypothesis_for_news(symbol, title + " " + desc)
-                                gemini_summary = hypo.get("reason_hindi", "") if isinstance(hypo, dict) else str(hypo)[:200]
-                            except Exception:
-                                gemini_summary = f"{title} - {desc[:100]}"
-                        else:
-                            gemini_summary = f"{title} - {desc[:100]} (Gemini connect karein to Hindi summary)"
-                        bias = row.get("gemini_bias", "Neutral")
-                        bias_color = "#16c784" if "Bullish" in str(bias) else "#ea3943" if "Bearish" in str(bias) else "#f0b90b"
-                        verified_tag = "[Verified 2+ sources]" if cross_verified else f"[{source}]"
-                        st.markdown(f"<div style='background:{bias_color}22;border:1px solid {bias_color};border-radius:8px;padding:10px 12px;margin:8px 0;'><b style='color:#f0b90b;'>{symbol} {verified_tag}</b> - <span style='color:{bias_color};'><b>{bias}</b></span><br><span style='color:#eaeaea;'><b>Headline:</b> {title}</span><br><span style='color:#ccc;'><b>Gemini Summary (Multi-Source):</b> {gemini_summary}</span><br><small style='color:#888;'>{desc[:150]}... | Confidence: {confidence}</small></div>", unsafe_allow_html=True)
-                else:
-                    st.info("Top news multi-source summary load ho raha hai... Moneycontrol + ET + Google News + NSE se free fetch")
-                    demo_news = [
-                        {"symbol": "RELIANCE", "title": "रिलायंस Q3 नतीजे - मुनाफा 12% बढ़ा", "summary": "Moneycontrol + ET + NSE 3 sources ने बताया - रिलायंस का Q3 मुनाफा 12% बढ़ा, जियो और रिटेल से ग्रोथ", "bias": "Bullish 📈", "impact": "High"},
-                        {"symbol": "NIFTY", "title": "FII बिकवाली, DII खरीदारी", "summary": "StockEdge + NSE + Moneycontrol verified - FII ने भारी बिकवाली की पर DII ने बैलेंस किया", "bias": "Neutral ➡️", "impact": "High"},
-                    ]
-                    for d in demo_news:
-                        bias_color = "#16c784" if "Bullish" in d["bias"] else "#ea3943" if "Bearish" in d["bias"] else "#f0b90b"
-                        st.markdown(f"<div style='background:{bias_color}22;border:1px solid {bias_color};border-radius:8px;padding:10px 12px;margin:8px 0;'><b style='color:#f0b90b;'>{d['symbol']}</b> - <span style='color:{bias_color};'><b>{d['bias']}</b></span><br><b>Headline:</b> {d['title']}<br><b>Multi-Source Summary:</b> {d['summary']}<br><small>Impact: {d['impact']}</small></div>", unsafe_allow_html=True)
-            except Exception as e:
-                st.warning(f"News summary error: {e}")
-
-        with tab_global:
-            st.markdown("**🌐 Global Market Data Current - Live (GIFT NIFTY Real, NIFTY 50 से अलग)**")
-            st.caption("GIFT NIFTY (real, NIFTY 50 से अलग), NIFTY 50, BANK NIFTY, USD/INR, XAUUSD, SPOTCRUDE, TLT - current price")
-            try:
-                from fast_live_price import get_live_price_hybrid_ultra_fast, get_gift_nifty_real
-                from secure_config import get_dhan_creds, is_dhan_configured
-                client_id = None
-                access_token = None
-                if is_dhan_configured():
-                    try:
-                        client_id, access_token = get_dhan_creds()
-                    except Exception:
-                        pass
-                gift_data = get_gift_nifty_real()
-                if gift_data:
-                    ltp = gift_data.get("ltp", 0)
-                    chg_pct = gift_data.get("change_pct", 0)
-                    color = "#16c784" if chg_pct >= 0 else "#ea3943"
-                    arrow = "▲" if chg_pct >= 0 else "▼"
-                    st.markdown(f"<div style='background:{color}22;border:1px solid {color};border-radius:8px;padding:8px 12px;margin:6px 0;'><b>GIFT NIFTY (Real, NIFTY 50 से अलग)</b> - {ltp:.2f} <span style='color:{color};'>{arrow} {chg_pct:+.2f}%</span><br><small>GIFT City, NSE IX</small></div>", unsafe_allow_html=True)
-                global_symbols = ("^NSEI", "^NSEBANK", "USDINR=X", "GC=F", "CL=F", "TLT")
-                global_prices = get_live_price_hybrid_ultra_fast(global_symbols, client_id, access_token)
-                for sym, data in global_prices.items():
-                    ltp = data.get("ltp", 0)
-                    chg_pct = data.get("change_pct", 0)
-                    color = "#16c784" if chg_pct >= 0 else "#ea3943"
-                    arrow = "▲" if chg_pct >= 0 else "▼"
-                    label_map = {"^NSEI": "NIFTY 50", "^NSEBANK": "BANK NIFTY", "USDINR=X": "USD/INR", "GC=F": "XAUUSD Gold", "CL=F": "SPOTCRUDE", "TLT": "TLT Bond"}
-                    label = label_map.get(sym, sym)
-                    st.markdown(f"<div style='background:#2a2a2a;border:1px solid #444;border-radius:8px;padding:8px 12px;margin:6px 0;'><b>{label}</b> - {ltp:.2f} <span style='color:{color};'>{arrow} {chg_pct:+.2f}%</span><br><small>Live: {'Dhan Real-Time' if client_id else 'Yahoo/NSE'} | No Delay</small></div>", unsafe_allow_html=True)
-                try:
-                    fii_sum = cached_fii_summary()
-                    fii_net = fii_sum.get("fii_net", 0)
-                    dii_net = fii_sum.get("dii_net", 0)
-                    fii_color = "#16c784" if fii_net >= 0 else "#ea3943"
-                    dii_color = "#16c784" if dii_net >= 0 else "#ea3943"
-                    st.markdown(f"<div style='background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:8px 12px;margin:6px 0;'><b>FII/DII Live</b> - <span style='color:{fii_color};'>FII {fii_net:+.0f}Cr</span> | <span style='color:{dii_color};'>DII {dii_net:+.0f}Cr</span><br><small>Trend: FII {fii_sum.get('fii_trend', '')} | DII {fii_sum.get('dii_trend', '')}</small></div>", unsafe_allow_html=True)
-                except Exception:
-                    pass
-            except Exception as e:
-                st.warning(f"Global market data error: {e}")
-
-        with tab_impact:
-            st.markdown("**📊 Event का Stock पर कैसा प्रभाव - Short में**")
-            st.caption("हर important news/event का किस stock/sector पर क्या असर होगा - Bullish/Bearish/Neutral + Reason Hindi में")
-            try:
-                from powerful_news_fetcher import get_verified_news_with_gemini_layers
-                verified_df = get_verified_news_with_gemini_layers()
-                if not verified_df.empty:
-                    for _, row in verified_df.head(6).iterrows():
-                        symbol = row.get("symbol", "")
-                        title = row.get("title", "")[:80]
-                        bias = row.get("gemini_bias", "Neutral")
-                        reason = row.get("gemini_reason_hindi", "")[:150]
-                        impact = row.get("gemini_impact", row.get("confidence", "Medium"))
-                        bias_color = "#16c784" if "Bullish" in str(bias) else "#ea3943" if "Bearish" in str(bias) else "#f0b90b"
-                        if symbol in ["NIFTY", "NIFTY 50", "GIFT NIFTY"]:
-                            affected = "NIFTY 50, BANK NIFTY, सभी F&O stocks पर असर"
-                        elif symbol in ["BANKNIFTY", "BANK NIFTY", "RBI"]:
-                            affected = "BANKNIFTY, HDFCBANK, ICICIBANK, SBIN, AXISBANK पर सीधा असर"
-                        elif symbol:
-                            affected = f"{symbol} + उसी सेक्टर के stocks पर असर"
-                        else:
-                            affected = "Market wide impact"
-                        st.markdown(f"<div style='background:{bias_color}22;border:1px solid {bias_color};border-radius:8px;padding:10px 12px;margin:8px 0;'><b style='color:#f0b90b;'>{symbol}</b> - <span style='color:{bias_color};'><b>{bias}</b></span> (Impact: {impact})<br><b>Event:</b> {title}<br><b>Stock पर प्रभाव:</b> {affected}<br><b>Reason (Hindi):</b> {reason}</div>", unsafe_allow_html=True)
-                else:
-                    demo_impacts = [
-                        {"symbol": "RELIANCE", "event": "Q3 नतीजे +12%", "bias": "Bullish 📈", "affected": "RELIANCE, ONGC, BPCL, पेंट सेक्टर", "reason": "अच्छे नतीजों से खरीदारी बढ़ेगी"},
-                        {"symbol": "BANKNIFTY", "event": "RBI पॉलिसी कल", "bias": "Neutral ➡️", "affected": "BANKNIFTY, HDFCBANK, ICICIBANK, SBIN", "reason": "ब्याज दर स्थिर रहने से साइडवेज"},
-                    ]
-                    for d in demo_impacts:
-                        bias_color = "#16c784" if "Bullish" in d["bias"] else "#ea3943" if "Bearish" in d["bias"] else "#f0b90b"
-                        st.markdown(f"<div style='background:{bias_color}22;border:1px solid {bias_color};border-radius:8px;padding:10px 12px;margin:8px 0;'><b style='color:#f0b90b;'>{d['symbol']}</b> - <span style='color:{bias_color};'><b>{d['bias']}</b></span><br><b>Event:</b> {d['event']}<br><b>Stock पर प्रभाव:</b> {d['affected']}<br><b>Reason:</b> {d['reason']}</div>", unsafe_allow_html=True)
-            except Exception as e:
-                st.warning(f"Event impact error: {e}")
-
-except Exception as _e:
-    st.warning(f"Top Market News section error: {_e} - Scanner fast चल रहा है")
-
-
 # Global macro badges
 try:
     if GLOBAL_AVAILABLE:
@@ -1188,6 +1236,7 @@ _DROP_COLS = [
     "Hypothesis (Short)", "⚡ Powerful", "⚡ News Desc",
     "LegOut RR", "RR>=3?", "Engulf OK", "Valid?", "Rule1(RBR)", "Rule2(DBD)", "Rule3(DBR)", "Rule4(RBD)",
     "Pulse", "Trend", "Aligned?", "Pulse Rule", "Trend Rule", "Score", "State", "Fresh?",
+    "Envelope OK", "Block Candles", "Half TF", "Half OK", "Half Aligned %",
 ]
 
 _DESIRED_ORDER = ["Symbol", "Timeframe", "Direction", "Pattern", "Entry (Proximal)", "Stop Loss (Distal+Buffer)", "Target (RR set)", "Current Price", "Distance %"]
@@ -1279,6 +1328,12 @@ def render_table_validated(df, file_label, all_frames=None):
             badges.append(_badge("RR>=3", str(int(df["RR>=3?"].sum())), "#8a2be2"))
         if "Valid?" in df.columns:
             badges.append(_badge("Valid (Rule5)", str(int(df["Valid?"].sum())), "#16c784"))
+        if "Envelope OK" in df.columns:
+            badges.append(_badge("Envelope OK", str(int(df["Envelope OK"].sum())), "#00bfff"))
+        if "Half OK" in df.columns:
+            badges.append(_badge("Half-TF OK", str(int(df["Half OK"].sum())), "#8a2be2"))
+        if "Block Candles" in df.columns:
+            badges.append(_badge("2C/3C blocks", str(int((df["Block Candles"] > 1).sum())), "#f0b90b"))
     _breadth_and_fii_badges(badges)
     if badges:
         st.markdown("".join(badges), unsafe_allow_html=True)
@@ -1567,7 +1622,14 @@ if "Main" in st.session_state.app_page:
 
 else:
     # ==================== VALIDATED PAGE - FAST OPEN (No Spinner) ====================
-    st.markdown(f"**Validation Preset:** `{preset_choice}` | **Params:** RR>={v_min_rr}, RR Filter={v_use_rr_filter}, Engulf={v_require_engulf}, PulseTrend={v_use_pulse_trend}, Aligned Required={v_require_aligned}")
+    use_v2_scan = bool(use_v2 and ZCV2_AVAILABLE)
+    if use_v2 and not ZCV2_AVAILABLE:
+        st.warning("⚠️ v2 engine select kiya hai par zone_core_validation_v2.py nahi mila - v1 se scan ho raha hai. File repo me upload karo.")
+    st.markdown(
+        f"**Validation Preset:** `{preset_choice}` | **Engine:** `{'v2 (leg-out complete + envelope + half-TF)' if use_v2_scan else 'v1 (pulse/trend + engulf)'}` "
+        f"| **Params:** RR>={v2_target_rr if use_v2_scan else v_min_rr}, RR Filter={v_use_rr_filter}, Engulf={v_require_engulf}, "
+        f"{'Envelope=' + ('stop+target' if v2_env_stop else 'target-only') + ', Half-TF=' + str(v2_half) + ', MinAligned=' + str(v2_half_pct) if use_v2_scan else 'PulseTrend=' + str(v_use_pulse_trend) + ', Aligned Required=' + str(v_require_aligned)}"
+    )
 
     if "validated_scan_results" not in st.session_state:
         st.session_state.validated_scan_results = None
@@ -1627,10 +1689,13 @@ else:
             funnels = {}
             all_frames_valid = {}
             for tf in tf_selected:
-                st.write(f"🔎 Validated Scanning {tf}...")
+                st.write(f"🔎 Validated Scanning {tf} ({'v2 engine' if use_v2_scan else 'v1 engine'})...")
                 try:
                     bucket = cc.last_closed_bucket(tf)
-                    df_tf, funnel, frames_tf = cached_validated_scan(tf, bucket, params_valid_tuple, scan_tickers_v, states_tuple)
+                    if use_v2_scan:
+                        df_tf, funnel, frames_tf = cached_validated_scan_v2(tf, bucket, params_valid_v2_tuple, scan_tickers_v, states_tuple)
+                    else:
+                        df_tf, funnel, frames_tf = cached_validated_scan(tf, bucket, params_valid_tuple, scan_tickers_v, states_tuple)
                     results_valid[tf] = df_tf
                     funnels[tf] = funnel
                     all_frames_valid[tf] = frames_tf
@@ -1777,7 +1842,6 @@ else:
                     df_funnel["pct"] = (100 * df_funnel["rejected"] / df_funnel["rejected"].sum()).round(1)
                     st.markdown(f"**{tf} Funnel**")
                     st.dataframe(df_funnel, width="stretch", hide_index=True)
-
 # ==================== NEXT POWERFUL FEATURES - Auto Trading ====================
 st.markdown("---")
 st.subheader("🚀 Next Powerful Features - Secure & Optional (Bina Key Ke Bhi Fast)")
@@ -1888,6 +1952,12 @@ with st.expander("ℹ️ Methodology + Security + Powerful Features", expanded=F
     - Ek symbol ke sirf N nazdeek zone, taki dusre symbols ke nazdeek zone na chhute
     - Settings (⚙️) me band/adjust kar sakte ho
 
+    **UI Change (NEW):**
+    - "LIVE: Important Market News / Events" + 3-in-1 news detail ab page ke sabse NICHE,
+      ek collapsed expander ke andar hain (top par nahi)
+    - Validated page: Engine = v1 ya v2 (naye niyam) chun sakte ho; v2 me Envelope + Half-TF
+      ke controls milte hain
+
     **Security (API Keys):**
     - Bina Dhan/Gemini key ke bhi app 100% fast chalega
     - Keys ho to auto-enable: Dhan holdings/orders, Gemini AI analysis
@@ -1934,3 +2004,167 @@ if is_dhan_configured():
                     st.info("No positions")
         except Exception as e:
             st.warning(f"Dhan error (secure, key masked): {e}. App fast mode me chalega.")
+# ==================== MOVED + COLLAPSED: Top Market News / Events ====================
+# NOTE: Ye poora section pehle page ke TOP par tha (market tape ke neeche).
+# Ab (a) page ke sabse NICHE shift hai aur (b) collapsed expander ke andar hai,
+# isliye page saaf rehta hai -- kholne par hi news dikhti hai.
+st.markdown("---")
+with st.expander("🔴 LIVE: Important Market News / Events - Hindi + AI Summary + Global Impact (3 in 1 - Last 1 Hour Fresh)", expanded=False):
+    # ---------- LIVE news cards ----------
+    try:
+        st.markdown("#### 🔴 Important Market News / Events - Current Notification (Last 1 Hour Fresh)")
+        try:
+            from powerful_news_fetcher import get_verified_news_with_gemini_layers
+            verified_news_df = get_verified_news_with_gemini_layers()
+            if verified_news_df is not None and not verified_news_df.empty:
+                for idx, row in verified_news_df.head(3).iterrows():
+                    title = str(row.get("title", ""))[:120]
+                    source = str(row.get("source", ""))
+                    confidence = str(row.get("confidence", "Medium"))
+                    symbol = str(row.get("symbol", "MARKET"))
+                    hindi_title = title
+                    try:
+                        if is_gemini_configured():
+                            from gemini_analyzer import quick_hindi_translate
+                            hindi_title = quick_hindi_translate(title)
+                    except Exception:
+                        pass
+                    bg = "#ea394322" if confidence == "High" else "#f0b90b22" if confidence == "Medium" else "#2a2a2a"
+                    border = "#ea3943" if confidence == "High" else "#f0b90b" if confidence == "Medium" else "#444"
+                    st.markdown(f"<div style='background:{bg};border:1px solid {border};border-radius:8px;padding:8px 12px;margin:6px 0;'><b style='color:#f0b90b;'>🔴 {symbol}</b> <span style='color:#eaeaea;'>{hindi_title}</span> <br><small style='color:#888;'>Source: {source} | Confidence: {confidence} | {row.get('date', '')}</small></div>", unsafe_allow_html=True)
+            else:
+                st.markdown("<div style='background:#2a2a2a;border:1px solid #444;border-radius:8px;padding:8px 12px;margin:6px 0;'><b style='color:#f0b90b;'>NIFTY</b> - Market live, no major news in last 1 hour <br><small style='color:#888;'>Source: NSE + StockEdge | Fresh: Last 1 Hour Checked</small></div>", unsafe_allow_html=True)
+        except Exception as e:
+            print(f"Top notification inner error (safe fallback): {e}")
+            st.markdown("<div style='background:#2a2a2a;border:1px solid #444;border-radius:8px;padding:8px 12px;margin:6px 0;'><b style='color:#f0b90b;'>MARKET</b> - Live market data loading... <br><small>News: Checking fresh 1 hour trending (if fails, app still works)</small></div>", unsafe_allow_html=True)
+    except Exception as _e:
+        print(f"Top notification outer safe error: {_e}")
+        st.caption("News loading... (app fast, no white screen)")
+
+    # ---------- 3-in-1 detail (pehle ye popover tha, ab expander ke andar tabs) ----------
+    try:
+        st.markdown("#### 📰 Top Market News / Events - Gemini Multi-Source Summary + Global Market Data + Event Impact (3 in 1, No Links)")
+        st.caption("News headline + Gemini AI kai sources ke news se ek me summary + Global market current data + Us stock par event ka short impact")
+
+        tab_summary, tab_global, tab_impact = st.tabs(["🇮🇳 News Summary (Gemini Multi-Source)", "🌐 Global Market Data Current", "📊 Event Impact on Stocks (Short)"])
+
+        with tab_summary:
+            st.markdown("**🔥 Gemini AI - Kai Sources ke News se Ek Me Samjhaya (Hindi)**")
+            st.caption("Moneycontrol + ET Markets + Google News + NSE + BSE - sab sources se ek hi news ka combined summary")
+            try:
+                from powerful_news_fetcher import get_verified_news_with_gemini_layers
+                verified_df = get_verified_news_with_gemini_layers()
+                if not verified_df.empty:
+                    for _, row in verified_df.head(8).iterrows():
+                        title = row.get("title", "")
+                        desc = row.get("desc", "")[:200]
+                        source = row.get("source", "")
+                        symbol = row.get("symbol", "")
+                        confidence = row.get("confidence", "Medium")
+                        cross_verified = row.get("cross_verified", False)
+                        gemini_summary = ""
+                        if is_gemini_configured() and row.get("gemini_reason_hindi"):
+                            gemini_summary = row.get("gemini_reason_hindi", "")
+                        elif is_gemini_configured():
+                            try:
+                                from gemini_analyzer import get_gemini_hypothesis_for_news
+                                hypo = get_gemini_hypothesis_for_news(symbol, title + " " + desc)
+                                gemini_summary = hypo.get("reason_hindi", "") if isinstance(hypo, dict) else str(hypo)[:200]
+                            except Exception:
+                                gemini_summary = f"{title} - {desc[:100]}"
+                        else:
+                            gemini_summary = f"{title} - {desc[:100]} (Gemini connect karein to Hindi summary)"
+                        bias = row.get("gemini_bias", "Neutral")
+                        bias_color = "#16c784" if "Bullish" in str(bias) else "#ea3943" if "Bearish" in str(bias) else "#f0b90b"
+                        verified_tag = "[Verified 2+ sources]" if cross_verified else f"[{source}]"
+                        st.markdown(f"<div style='background:{bias_color}22;border:1px solid {bias_color};border-radius:8px;padding:10px 12px;margin:8px 0;'><b style='color:#f0b90b;'>{symbol} {verified_tag}</b> - <span style='color:{bias_color};'><b>{bias}</b></span><br><span style='color:#eaeaea;'><b>Headline:</b> {title}</span><br><span style='color:#ccc;'><b>Gemini Summary (Multi-Source):</b> {gemini_summary}</span><br><small style='color:#888;'>{desc[:150]}... | Confidence: {confidence}</small></div>", unsafe_allow_html=True)
+                else:
+                    st.info("Top news multi-source summary load ho raha hai... Moneycontrol + ET + Google News + NSE se free fetch")
+                    demo_news = [
+                        {"symbol": "RELIANCE", "title": "रिलायंस Q3 नतीजे - मुनाफा 12% बढ़ा", "summary": "Moneycontrol + ET + NSE 3 sources ने बताया - रिलायंस का Q3 मुनाफा 12% बढ़ा, जियो और रिटेल से ग्रोथ", "bias": "Bullish 📈", "impact": "High"},
+                        {"symbol": "NIFTY", "title": "FII बिकवाली, DII खरीदारी", "summary": "StockEdge + NSE + Moneycontrol verified - FII ने भारी बिकवाली की पर DII ने बैलेंस किया", "bias": "Neutral ➡️", "impact": "High"},
+                    ]
+                    for d in demo_news:
+                        bias_color = "#16c784" if "Bullish" in d["bias"] else "#ea3943" if "Bearish" in d["bias"] else "#f0b90b"
+                        st.markdown(f"<div style='background:{bias_color}22;border:1px solid {bias_color};border-radius:8px;padding:10px 12px;margin:8px 0;'><b style='color:#f0b90b;'>{d['symbol']}</b> - <span style='color:{bias_color};'><b>{d['bias']}</b></span><br><b>Headline:</b> {d['title']}<br><b>Multi-Source Summary:</b> {d['summary']}<br><small>Impact: {d['impact']}</small></div>", unsafe_allow_html=True)
+            except Exception as e:
+                st.warning(f"News summary error: {e}")
+
+        with tab_global:
+            st.markdown("**🌐 Global Market Data Current - Live (GIFT NIFTY Real, NIFTY 50 से अलग)**")
+            st.caption("GIFT NIFTY (real, NIFTY 50 से अलग), NIFTY 50, BANK NIFTY, USD/INR, XAUUSD, SPOTCRUDE, TLT - current price")
+            try:
+                from fast_live_price import get_live_price_hybrid_ultra_fast, get_gift_nifty_real
+                from secure_config import get_dhan_creds, is_dhan_configured
+                client_id = None
+                access_token = None
+                if is_dhan_configured():
+                    try:
+                        client_id, access_token = get_dhan_creds()
+                    except Exception:
+                        pass
+                gift_data = get_gift_nifty_real()
+                if gift_data:
+                    ltp = gift_data.get("ltp", 0)
+                    chg_pct = gift_data.get("change_pct", 0)
+                    color = "#16c784" if chg_pct >= 0 else "#ea3943"
+                    arrow = "▲" if chg_pct >= 0 else "▼"
+                    st.markdown(f"<div style='background:{color}22;border:1px solid {color};border-radius:8px;padding:8px 12px;margin:6px 0;'><b>GIFT NIFTY (Real, NIFTY 50 से अलग)</b> - {ltp:.2f} <span style='color:{color};'>{arrow} {chg_pct:+.2f}%</span><br><small>GIFT City, NSE IX</small></div>", unsafe_allow_html=True)
+                global_symbols = ("^NSEI", "^NSEBANK", "USDINR=X", "GC=F", "CL=F", "TLT")
+                global_prices = get_live_price_hybrid_ultra_fast(global_symbols, client_id, access_token)
+                for sym, data in global_prices.items():
+                    ltp = data.get("ltp", 0)
+                    chg_pct = data.get("change_pct", 0)
+                    color = "#16c784" if chg_pct >= 0 else "#ea3943"
+                    arrow = "▲" if chg_pct >= 0 else "▼"
+                    label_map = {"^NSEI": "NIFTY 50", "^NSEBANK": "BANK NIFTY", "USDINR=X": "USD/INR", "GC=F": "XAUUSD Gold", "CL=F": "SPOTCRUDE", "TLT": "TLT Bond"}
+                    label = label_map.get(sym, sym)
+                    st.markdown(f"<div style='background:#2a2a2a;border:1px solid #444;border-radius:8px;padding:8px 12px;margin:6px 0;'><b>{label}</b> - {ltp:.2f} <span style='color:{color};'>{arrow} {chg_pct:+.2f}%</span><br><small>Live: {'Dhan Real-Time' if client_id else 'Yahoo/NSE'} | No Delay</small></div>", unsafe_allow_html=True)
+                try:
+                    fii_sum = cached_fii_summary()
+                    fii_net = fii_sum.get("fii_net", 0)
+                    dii_net = fii_sum.get("dii_net", 0)
+                    fii_color = "#16c784" if fii_net >= 0 else "#ea3943"
+                    dii_color = "#16c784" if dii_net >= 0 else "#ea3943"
+                    st.markdown(f"<div style='background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:8px 12px;margin:6px 0;'><b>FII/DII Live</b> - <span style='color:{fii_color};'>FII {fii_net:+.0f}Cr</span> | <span style='color:{dii_color};'>DII {dii_net:+.0f}Cr</span><br><small>Trend: FII {fii_sum.get('fii_trend', '')} | DII {fii_sum.get('dii_trend', '')}</small></div>", unsafe_allow_html=True)
+                except Exception:
+                    pass
+            except Exception as e:
+                st.warning(f"Global market data error: {e}")
+
+        with tab_impact:
+            st.markdown("**📊 Event का Stock पर कैसा प्रभाव - Short में**")
+            st.caption("हर important news/event का किस stock/sector पर क्या असर होगा - Bullish/Bearish/Neutral + Reason Hindi में")
+            try:
+                from powerful_news_fetcher import get_verified_news_with_gemini_layers
+                verified_df = get_verified_news_with_gemini_layers()
+                if not verified_df.empty:
+                    for _, row in verified_df.head(6).iterrows():
+                        symbol = row.get("symbol", "")
+                        title = row.get("title", "")[:80]
+                        bias = row.get("gemini_bias", "Neutral")
+                        reason = row.get("gemini_reason_hindi", "")[:150]
+                        impact = row.get("gemini_impact", row.get("confidence", "Medium"))
+                        bias_color = "#16c784" if "Bullish" in str(bias) else "#ea3943" if "Bearish" in str(bias) else "#f0b90b"
+                        if symbol in ["NIFTY", "NIFTY 50", "GIFT NIFTY"]:
+                            affected = "NIFTY 50, BANK NIFTY, सभी F&O stocks पर असर"
+                        elif symbol in ["BANKNIFTY", "BANK NIFTY", "RBI"]:
+                            affected = "BANKNIFTY, HDFCBANK, ICICIBANK, SBIN, AXISBANK पर सीधा असर"
+                        elif symbol:
+                            affected = f"{symbol} + उसी सेक्टर के stocks पर असर"
+                        else:
+                            affected = "Market wide impact"
+                        st.markdown(f"<div style='background:{bias_color}22;border:1px solid {bias_color};border-radius:8px;padding:10px 12px;margin:8px 0;'><b style='color:#f0b90b;'>{symbol}</b> - <span style='color:{bias_color};'><b>{bias}</b></span> (Impact: {impact})<br><b>Event:</b> {title}<br><b>Stock पर प्रभाव:</b> {affected}<br><b>Reason (Hindi):</b> {reason}</div>", unsafe_allow_html=True)
+                else:
+                    demo_impacts = [
+                        {"symbol": "RELIANCE", "event": "Q3 नतीजे +12%", "bias": "Bullish 📈", "affected": "RELIANCE, ONGC, BPCL, पेंट सेक्टर", "reason": "अच्छे नतीजों से खरीदारी बढ़ेगी"},
+                        {"symbol": "BANKNIFTY", "event": "RBI पॉलिसी कल", "bias": "Neutral ➡️", "affected": "BANKNIFTY, HDFCBANK, ICICIBANK, SBIN", "reason": "ब्याज दर स्थिर रहने से साइडवेज"},
+                    ]
+                    for d in demo_impacts:
+                        bias_color = "#16c784" if "Bullish" in d["bias"] else "#ea3943" if "Bearish" in d["bias"] else "#f0b90b"
+                        st.markdown(f"<div style='background:{bias_color}22;border:1px solid {bias_color};border-radius:8px;padding:10px 12px;margin:8px 0;'><b style='color:#f0b90b;'>{d['symbol']}</b> - <span style='color:{bias_color};'><b>{d['bias']}</b></span><br><b>Event:</b> {d['event']}<br><b>Stock पर प्रभाव:</b> {d['affected']}<br><b>Reason:</b> {d['reason']}</div>", unsafe_allow_html=True)
+            except Exception as e:
+                st.warning(f"Event impact error: {e}")
+    except Exception as _e:
+        st.warning(f"Top Market News section error: {_e} - Scanner fast चल रहा है")
+# ==================== /MOVED + COLLAPSED SECTION ====================
