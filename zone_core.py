@@ -1,49 +1,83 @@
 """
 zone_core.py  -  Pine Script "Zone MTF" indicator ka Python scanner version.
+=================================================================================
+*** PINE PARITY REVISION (v2) ***
+Ye revision zone_core.py ko Pine Script "Zone MTF" ke saath match karata hai,
+taaki jo zone Pine par active (Fresh/Tested) nahi hai wo scanner me bhi na aaye.
 
-INPUTS SYNC (is revision me):
-    PINE_DEFAULTS ke saare inputs ab Pine Script ("Zone MTF") ke input.*()
-    parameters se EXACT ek jaise hain - naam, default value aur order same.
-    Pine ke display-only inputs (MTF lines / Shadows / Swings) bhi yahan
-    config me rakhe gaye hain taaki dono taraf ka input-set ek ho; ye
-    scanner ki zone validation me use nahi hote (Pine me bhi sirf display
-    ke liye hain).
+Sabse pehle: ASLI WAJAH samajhna zaroori hai
+-------------------------------------------
+Aapka INFY 2H DEMAND zone (Entry 992.70 / SL 979.32) Python scanner me isliye
+nikal raha tha kyunki 2H frame ka leg-out candle **15:15 ki 15-minute candle**
+thi. NSE me 03-Aug-2026 se F&O stocks (poore Nifty 50) me **continuous trading
+15:15 par band** ho jaati hai; 15:15 ke baad Closing Auction Session (CAS) sirf
+ek single print deta hai. Yahoo ise 15:15 ki alag candle bana deta hai, aur
+purana frame builder us 15-minute candle ko poora **2H candle** maan leta tha.
+TradingView ke 2H chart par aisi koi candle nahi hoti (uska session 09:15-15:15
+hai) - isliye Pine me ye zone kabhi banta hi nahi, ya turant Broken ho jata hai.
 
-Scanner-only (Pine me nahi) - sirf ek:
-    * useEodRange: EOD Range filter ON/OFF.
-      Pine se bilkul same result chahiye to useEodRange=False kar dein.
-      (Default True rakha gaya hai taaki purana scanner behaviour na badle.)
+Is revision me do tarah ke Pine-parity fixes hain:
 
-Baaki SAB kuch pehle jaisa: leg-in/base/leg-out rules, imbalance,
-engulf check, classification, scoring (densityScore/minValidScore/HQ),
-duplicate check, zone levels (SL/TP/legOutMidLevel).
+  A. FRAME parity (naya): session ke bahar ki candles (jaise post-CAS 15:15
+     auction bar) intraday frame se hata di jaati hain --
+     `trim_out_of_session_bars()` (app me wired) aur `session_bars()`
+     (raw 1h/15m data se Pine-jaisa frame banane ke liye).
 
-*** STATE RULE (User Requirement - Tested zone सुधार) ***
-    Fresh -> Tested tab hoga jab price PROXIMAL LINE (proxVal) ko chhuyega.
-    Tested -> Broken sirf tab hoga jab DISTAL LINE (distVal) toot jayega.
-    (maxTestedCount wala auto-break nahi hai - input maujood hai par inert.)
+  B. RULE parity (naya): state rules --
+     (1) State ka faisla leg-out candle COMPLETE hone ke baad wali bars par hota
+         hai (zone usi candle se banta hai) -- creation bar khud ko test nahi karta.
+     (2) testedBasis = "proximal_or_mid" (DEFAULT) : Fresh zone "Tested" ho jaata
+         hai jab price PROXIMAL line chhue YA leg-out mid level chhue (dono me se
+         jo pehle aa jaye). Sirf-proximal ke liye preset TESTED_AT_PROXIMAL,
+         sirf Pine-jaisa leg-out mid ke liye preset PINE_PARITY.
+         (legOutMidLevel: testedLegOutRetracePct = 1.00 -> demand me leg-out
+          candle ka low / supply me leg-out candle ka high.)
+     (3) BROKEN SIRF DISTAL BREAK PAR -- useMaxTestedCountBreak = False (DEFAULT):
+         zone tab tak Tested rehta hai jab tak price DISTAL line ko chhu kar tod
+         na de. Touch count badhne se zone apne aap Broken NAHI hota.
+         (Pine script ka auto-break variant chahiye to preset PINE_STRICT.)
+     (4) useEodRange = False : Pine me EOD Range filter hai hi nahi, aur scanner ko
+         bahut saare stocks me zones dhoondhne hain (EOD filter door ke zones ko
+         gira deta hai) -- isliye ye scanner-only filter default OFF hai.
 
-Note: Pine ke "PARITY INPUTS" (closing-wick, coverage, HQ-colour, white-area,
-boring %, body mult, scan-once flags, scanAfterCandleComplete) Pine me bhi
-logic se jude nahi hain, isliye yahan bhi sirf config me rakhe hain (inert).
+Purana (custom) behaviour ek switch se turant wapas milta hai:
+    zone_core.scan_zones(df, params=dict(zone_core.LEGACY_SCANNER))
+    ya ZoneEngine(df, **zone_core.settings(**zone_core.LEGACY_SCANNER))
+Presets: DEFAULT_RULES (module defaults) | PINE_PARITY | PINE_STRICT |
+         LEGACY_SCANNER | TESTED_AT_PROXIMAL.
 
-Compatibility:
-    Legacy Zone fields neutral defaults ke saath retained hain taaki purane
-    scanner.py ke display-column accesses (z.whiteAreaOK etc.) chalte rahein.
-    Timestamp conversion naive aur timezone-aware DatetimeIndex dono support karta hai.
+Inputs sync: PINE_DEFAULTS ke core/inert/scanner-only inputs purane zone_core.py
+jaise hi hain (naam aur default). Pine ke display-only inputs (MTF lines, Shadow,
+Swing) sirf reference ke liye rakhe gaye hain - Pine me bhi ye display-only hain.
+
+Baaki SAB kuch jaisa tha: leg-in/base/leg-out gates, imbalance/engulf check,
+RBR/DBR/DBD/RBD classification, density score (minValidScore/hqScoreThreshold),
+duplicate check (11 zones, 0.25 ATR), EOD range function, SL (distal +/- ATR
+buffer), TP (targetRR), legOutMidLevel, legOutReward, zoneBox, state flow
+Fresh/Tested/Broken aur entry tracking (ENTRY_FRESH) -- same.
+
+Timestamp: naive aur timezone-aware (IST) DatetimeIndex dono support.
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
+from datetime import date as _date
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
+# ---------------------------------------------------------------------------
+# NSE session constants (Pine / TradingView intraday bar convention)
+# ---------------------------------------------------------------------------
+SESSION_OPEN_MIN = 9 * 60 + 15          # 09:15 IST - session open
+CONTINUOUS_END_MIN = 15 * 60 + 15       # 15:15 IST - F&O stocks: continuous trading khatam (CAS ke baad)
+SESSION_END_MIN = 15 * 60 + 30          # 15:30 IST - purana (pre-CAS) session end
+CAS_FROM = "2026-08-03"                 # NSE Closing Auction Session Phase-1 live
+
 PINE_DEFAULTS: Dict[str, Any] = {
-    # ================= Pine: original indicator inputs =================
+    # ---------------- original indicator inputs (same defaults) ----------------
     "accountCapital": 25000.0,          # "Account Capital"
     "riskPct": 0.5,                     # "Risk %"
     "targetRR": 5.0,                    # "Target RR"
@@ -71,14 +105,12 @@ PINE_DEFAULTS: Dict[str, Any] = {
     "minValidScore": 40,                # "Min Valid Score"
     "hqScoreThreshold": 90,             # "HQ Score Threshold"
     "legOutBodyHeavyPct": 0.60,         # "Leg-Out Body Heavy Pressure %"
-    "testedLegOutRetracePct": 1.00,     # "Tested Leg-Out Retrace %"
-    "maxTestedCount": 1,                # "Max Tested Count" (state rule me inert)
+    "testedLegOutRetracePct": 1.00,     # "Tested Leg-Out Retrace %"  (mid level)
+    "maxTestedCount": 1,                # "Max Tested Count"
 
-    # ================= Pine: parity-only inputs (inert) =================
+    # ---------------- Pine parity inputs (inert, jaise pehle the) ---------------
     "legOutToLegInBodyMult": 1.0,       # "Leg-Out to Leg-In Body Mult"
     "baseBoringMaxBodyPct": 0.55,       # "Base Small-Body (Indecision) %"
-    "eodHighBufferPct": 10.0,           # "EOD High Buffer %"
-    "eodLowBufferPct": 10.0,            # "EOD Low Buffer %"
     "scanAfterCandleComplete": True,    # "Scan After Candle Complete"
     "scanMonthlyOnce": True,            # "Scan Monthly Once"
     "scanWeeklyOnce": True,             # "Scan Weekly Once"
@@ -91,23 +123,72 @@ PINE_DEFAULTS: Dict[str, Any] = {
     "hqBaseColourProbabilityPct": 90.0, # "HQ Base Colour Probability %"
     "enableWhiteAreaCheck": True,       # "Use White Area Check"
 
-    # ================= Pine: MTF / Shadow / Swing inputs =================
-    # Ye Pine me sirf chart display ke liye hain; scanner validation me use nahi hote.
+    # ---------------- Pine display-only inputs (scanner se koi asar nahi) -------
     "showMTF": True,                    # "Show other-TF proximal lines"
     "filterDistantMTF": True,           # "Hide distant MTF lines (display only)"
     "mtfNearPct": 8.0,                  # "Show lines within % of last price"
-    "showShadow": True,                 # "Shadow when prior zone behind / broken / swing broken"
+    "showShadow": True,                 # "Shadow when prior zone behind / broken"
     "showFlags": True,                  # "Show BASE BREAK / SWING labels"
     "shadowAtr": 0.08,                  # "Shadow padding x ATR"
     "swingLeft": 3,                     # "Confirmed swing: bars on left"
     "swingRight": 3,                    # "Confirmed swing: bars on right"
-    "maxStored": 220,                   # "Max chart zones (boxes <= 500)"
+    "maxStored": 220,                   # "Max chart zones"
 
-    # ================= SCANNER-ONLY (Pine me nahi) =================
-    "useEodRange": True,                # EOD Range filter; Pine parity ke liye False karein
+    # ---------------- SCANNER-ONLY (Pine me nahi) -------------------------------
+    "eodHighBufferPct": 10.0,           # "EOD High Buffer %"   (useEodRange=True par)
+    "eodLowBufferPct": 10.0,            # "EOD Low Buffer %"    (useEodRange=True par)
+    "useEodRange": False,               # Pine me EOD filter nahi + kai stocks ke zones chahiye (purana: True)
+    "testedBasis": "proximal_or_mid",   # DEFAULT: Tested jab proximal YA legOutMid chhue
+                                        # ("proximal" = sirf proximal | "legOutMid" = sirf Pine mid)
+    "useMaxTestedCountBreak": False,    # DEFAULT OFF: Broken SIRF distal break par (touches se auto-break nahi)
+    "sessionAwareFrames": True,         # PINE PARITY: session bahar ki candles (CAS 15:15) hataao
 }
 
 HARD_MAX_BASE_COUNT = 3
+
+# ---------------------------------------------------------------------------
+# Presets (params me **preset pass kar dein)
+# ---------------------------------------------------------------------------
+# DEFAULT_RULES -- module defaults ka mirror (jo bina kuch pass kiye chalta hai):
+#   Tested = proximal YA leg-out mid | Broken = sirf distal break | EOD filter OFF.
+DEFAULT_RULES: Dict[str, Any] = dict(
+    useEodRange=False,
+    testedBasis="proximal_or_mid",
+    useMaxTestedCountBreak=False,
+)
+# Pine "Zone MTF" jaisa tested level (sirf leg-out mid), par Broken sirf distal par.
+PINE_PARITY: Dict[str, Any] = dict(
+    useEodRange=False,
+    testedBasis="legOutMid",
+    useMaxTestedCountBreak=False,
+)
+# Purana scanner: EOD filter ON + tested proximal par (+ distal break).
+LEGACY_SCANNER: Dict[str, Any] = dict(
+    useEodRange=True,
+    testedBasis="proximal",
+    useMaxTestedCountBreak=False,
+)
+# Sirf proximal par Tested (EOD filter OFF).
+TESTED_AT_PROXIMAL: Dict[str, Any] = dict(
+    useEodRange=False,
+    testedBasis="proximal",
+    useMaxTestedCountBreak=False,
+)
+# Reference only: Pine script ka poora variant (touches > maxTestedCount => Broken).
+# User-approved rule "Broken sirf distal par" ke khilaaf hai, isliye default me NAHI.
+PINE_STRICT: Dict[str, Any] = dict(
+    useEodRange=False,
+    testedBasis="legOutMid",
+    useMaxTestedCountBreak=True,
+)
+RULE_PRESETS: Dict[str, Dict[str, Any]] = {
+    "default_rules": dict(DEFAULT_RULES),
+    "pine_parity": dict(PINE_PARITY),
+    "legacy_scanner": dict(LEGACY_SCANNER),
+    "tested_at_proximal": dict(TESTED_AT_PROXIMAL),
+    "pine_strict": dict(PINE_STRICT),
+    "pine_auto_break": dict(PINE_STRICT),   # purana naam (backward-compatible)
+}
 
 
 @dataclass
@@ -131,6 +212,7 @@ class Box:
 
 @dataclass
 class Zone:
+    # Original zone_core.py Zone fields -- same order (scanner.py compatibility).
     proxVal: float
     distVal: float
     slVal: float
@@ -174,6 +256,13 @@ class Zone:
     baseIndecision: bool = False
     baseDojiCount: int = 0
 
+    legOutReward: float = float("nan")
+    legInBarIndex: Optional[int] = None
+    legInHigh: float = float("nan")
+    legInLow: float = float("nan")
+    legOutClose: float = float("nan")
+    isFresh: bool = True
+
 
 def _positive_float(value: Any, name: str) -> float:
     try:
@@ -186,7 +275,7 @@ def _positive_float(value: Any, name: str) -> float:
 
 
 def get_eod_range(df: pd.DataFrame, idx: int, high_buffer_pct: float = 10.0,
-                  low_buffer_pct: float = 10.0) -> tuple[float, float]:
+                  low_buffer_pct: float = 10.0) -> Tuple[float, float]:
     try:
         d = df.index[idx].date()
         day = df[df.index.date == d]
@@ -218,7 +307,9 @@ def check_leg_out_coverage(df: pd.DataFrame, leg_out_idx: int, curr_idx: int,
     overlap = (np.minimum(window["high"], hi) - np.maximum(window["low"], lo)).clip(lower=0)
     return not bool(((overlap / rng) > max_cover_pct / 100).any())
 
+
 SCAN_TRACKER: Dict[str, datetime] = {}
+
 
 def should_scan_now(tf: str, force: bool = False) -> bool:
     now = datetime.now()
@@ -234,17 +325,142 @@ def should_scan_now(tf: str, force: bool = False) -> bool:
         return True
     return False
 
+
+# ---------------------------------------------------------------------------
+# PINE PARITY: NSE session / frame helpers
+# ---------------------------------------------------------------------------
+TF_MINUTES: Dict[str, int] = {
+    "1m": 1, "3m": 3, "5m": 5, "10m": 10, "15m": 15, "30m": 30, "75m": 75,
+    "1H": 60, "2H": 120, "3H": 180, "4H": 240, "6H": 360,
+}
+
+
+def tf_minutes(tf: str) -> int:
+    return int(TF_MINUTES.get(str(tf).strip(), 0))
+
+
+def _bar_end_minutes(idx: pd.DatetimeIndex,
+                     session_end_min: int = SESSION_END_MIN,
+                     cas_from: str = CAS_FROM) -> np.ndarray:
+    """Har bar ke liye us din ka session-end (minutes since midnight).
+    Post-CAS (>= cas_from) par F&O stocks ka continuous session 15:15 par khatam."""
+    try:
+        cas_date = _date.fromisoformat(str(cas_from))
+        post = np.array([d >= cas_date for d in idx.date], dtype=bool)
+    except Exception:
+        post = np.zeros(len(idx), dtype=bool)
+    return np.where(post, CONTINUOUS_END_MIN, int(session_end_min)).astype(int)
+
+
+def trim_out_of_session_bars(frame: pd.DataFrame,
+                             session_end_min: int = SESSION_END_MIN,
+                             cas_from: str = CAS_FROM) -> pd.DataFrame:
+    """Pine/TV parity: session ke bahar start hone wali candles hataata hai.
+
+    Post-CAS (03-Aug-2026 se) F&O stocks me 15:15 ki CAS/auction candle kisi bhi
+    intraday bar ka hissa nahi hoti (TradingView session 09:15-15:15 hai), isliye
+    aisi candles frame se hata di jaati hain. Pre-CAS history me 15:15-15:30 ka
+    normal trading tha, wo bani rehti hai.
+
+    Yahi wajah thi ki INFY 2H ka ghost zone (Entry 992.70 / SL 979.32) scanner me
+    aa raha tha -- us zone ka leg-out candle 15:15 ki 15-minute auction candle thi.
+    """
+    if frame is None or len(frame) == 0 or not isinstance(frame.index, pd.DatetimeIndex):
+        return frame
+    idx = frame.index
+    mins = idx.hour * 60 + idx.minute
+    ends = _bar_end_minutes(idx, session_end_min=session_end_min, cas_from=cas_from)
+    keep = mins < ends
+    if bool(keep.all()):
+        return frame
+    return frame.loc[keep]
+
+
+def trim_frames(frames: Dict[str, pd.DataFrame],
+                session_end_min: int = SESSION_END_MIN,
+                cas_from: str = CAS_FROM) -> Dict[str, pd.DataFrame]:
+    """trim_out_of_session_bars() ko {symbol: frame} dict par lagao (app ke liye)."""
+    if not frames:
+        return frames
+    out: Dict[str, pd.DataFrame] = {}
+    for sym, frame in frames.items():
+        try:
+            out[sym] = trim_out_of_session_bars(frame, session_end_min=session_end_min,
+                                                cas_from=cas_from)
+        except Exception:
+            out[sym] = frame
+    return out
+
+
+def session_bars(df: pd.DataFrame, minutes: int,
+                 session_open_min: int = SESSION_OPEN_MIN,
+                 session_end_min: int = SESSION_END_MIN,
+                 cas_from: str = CAS_FROM) -> pd.DataFrame:
+    """Raw intraday data -> NSE session-anchored frame (09:15 anchor), Pine jaisa.
+
+    Post-CAS par 15:15 ke baad ki candles hata di jaati hain, isliye 2H frame me
+    3 candles aati hain (09:15, 11:15, 13:15) -- TradingView ke 2H jaisa hi.
+    """
+    if df is None or len(df) == 0:
+        return df
+    empty_cols = ["open", "high", "low", "close", "volume"]
+    minutes = int(minutes)
+    if minutes <= 0:
+        raise ValueError("minutes must be positive")
+    idx = pd.DatetimeIndex(df.index)
+    mod = (idx.hour * 60 + idx.minute) - int(session_open_min)
+    bucket = np.where(mod < 0, -1, np.floor_divide(mod, minutes))
+    start_min = int(session_open_min) + bucket * minutes
+    ends = _bar_end_minutes(idx, session_end_min=session_end_min, cas_from=cas_from)
+    keep = (bucket >= 0) & (start_min < ends)
+    if not bool(np.any(keep)):
+        return pd.DataFrame(columns=empty_cols)
+    work = pd.DataFrame({
+        "open": df["open"].to_numpy(float),
+        "high": df["high"].to_numpy(float),
+        "low": df["low"].to_numpy(float),
+        "close": df["close"].to_numpy(float),
+        "volume": (df["volume"].to_numpy(float) if "volume" in df.columns else 0.0),
+        "__d__": pd.DatetimeIndex(idx).normalize(),
+        "__s__": start_min,
+        "__t__": idx,
+    }, index=idx)
+    work = work[keep]
+    agg = work.groupby(["__d__", "__s__"], sort=True).agg(
+        open=("open", "first"), high=("high", "max"), low=("low", "min"),
+        close=("close", "last"), volume=("volume", "sum"), start=("__t__", "first"),
+    )
+    out = pd.DataFrame({
+        "open": agg["open"].to_numpy(float),
+        "high": agg["high"].to_numpy(float),
+        "low": agg["low"].to_numpy(float),
+        "close": agg["close"].to_numpy(float),
+        "volume": agg["volume"].to_numpy(float),
+    }, index=pd.DatetimeIndex(agg["start"].to_numpy()))
+    return out.sort_index()
+
+
 class ZoneEngine:
     def __init__(self, df: pd.DataFrame, **kwargs: Any):
         self.df = df.copy()
         if "volume" not in self.df.columns:
             self.df["volume"] = 0.0
         self.df["volume"] = self.df["volume"].fillna(0.0)
-        for k, d in PINE_DEFAULTS.items():
-            setattr(self, k, kwargs.get(k, d))
+        for key, default in PINE_DEFAULTS.items():
+            setattr(self, key, kwargs.get(key, default))
+
         self.accountCapital = _positive_float(self.accountCapital, "accountCapital")
+        # Original zone_core.py base-count behaviour.
         self.minBaseCount = max(1, min(self.minBaseCountInput, self.maxBaseCountInput))
         self.maxBaseCount = min(self.maxBaseCountInput, HARD_MAX_BASE_COUNT)
+        # Tested trigger basis: "proximal" | "legoutmid" | "either" (default)
+        _basis = str(self.testedBasis).strip().lower()
+        if _basis in ("proximal", "prox"):
+            self.tested_basis = "proximal"
+        elif _basis in ("legoutmid", "legout", "mid", "leg_out_mid"):
+            self.tested_basis = "legoutmid"
+        else:  # "proximal_or_mid", "either", "both", default
+            self.tested_basis = "either"
 
         self.o = self.df["open"].to_numpy(float)
         self.h = self.df["high"].to_numpy(float)
@@ -259,24 +475,28 @@ class ZoneEngine:
         self.time_ms = time_index.astype("datetime64[ns]").astype(np.int64) // 10**6
         self.active_zones: List[Zone] = []
         self.live_zones: List[Zone] = []
+        self.pattern_registry: List[Zone] = []
         self._prepare()
 
-    def _rma(self, s: np.ndarray, length: int) -> np.ndarray:
-        r = np.full(len(s), np.nan)
-        if len(s) < length:
-            return r
-        r[length - 1] = np.mean(s[:length])
-        for i in range(length, len(s)):
-            r[i] = (s[i] - r[i - 1]) / length + r[i - 1]
-        return r
+    def _rma(self, values: np.ndarray, length: int) -> np.ndarray:
+        result = np.full(len(values), np.nan)
+        if len(values) < length:
+            return result
+        result[length - 1] = np.mean(values[:length])
+        for i in range(length, len(values)):
+            result[i] = (values[i] - result[i - 1]) / length + result[i - 1]
+        return result
 
     def _prepare(self) -> None:
-        n = self.n
-        tr = self.h - self.l
-        if n > 1:
-            pc = self.c[:-1]
-            tr[1:] = np.maximum(tr[1:], np.maximum(np.abs(self.h[1:] - pc), np.abs(self.l[1:] - pc)))
-        self.atr = self._rma(tr, self.atrPeriod)
+        true_range = self.h - self.l
+        if self.n > 1:
+            previous_close = self.c[:-1]
+            true_range[1:] = np.maximum(
+                true_range[1:],
+                np.maximum(np.abs(self.h[1:] - previous_close),
+                           np.abs(self.l[1:] - previous_close)),
+            )
+        self.atr = self._rma(true_range, self.atrPeriod)
         self.vol_sma = self.df["volume"].rolling(self.volSmaPeriod).mean().to_numpy()
         day_key = self.df.index.normalize()
         self.day_high = self.df["high"].groupby(day_key).transform("max").to_numpy()
@@ -310,58 +530,79 @@ class ZoneEngine:
             return False
         return bool(self.dow[i] != self.dow[i - 1] or (self.time_ms[i] - self.time_ms[i - 1]) > 86400000)
 
+    def _tested_trigger(self, zone: Zone) -> float:
+        """Wo level jise chhute hi zone Tested ho jaata hai.
+
+        default ("either") = proximal YA leg-out mid, jo bhi pehle aa jaye:
+            demand me dono me se upar wala level (low usse neeche jate hi),
+            supply me dono me se neeche wala level (high usse upar jate hi).
+        """
+        if self.tested_basis == "proximal":
+            return zone.proxVal
+        if self.tested_basis == "legoutmid":
+            return zone.legOutMidLevel
+        if zone.isDemand:
+            return max(zone.proxVal, zone.legOutMidLevel)
+        return min(zone.proxVal, zone.legOutMidLevel)
+
+    # ------------------------------------------------------------------
+    # original candidate scan (same gates, same order, same scoring)
+    # ------------------------------------------------------------------
     def _scan_bar(self, i: int) -> None:
         atr_now = self.atr[i]
         found = False
-        for bc in range(self.minBaseCount, self.maxBaseCount + 1):
+        for base_count in range(self.minBaseCount, self.maxBaseCount + 1):
             if found:
                 break
-            li = bc + 1
-            pi = li + 1
-            p_in, p_prev, p_out = i - li, i - pi, i
+            leg_in_offset = base_count + 1
+            previous_offset = leg_in_offset + 1
+            p_in = i - leg_in_offset
+            p_prev = i - previous_offset
+            p_out = i
             if p_prev < 0 or np.isnan(self.atr[p_in]):
                 continue
 
             leg_in_tr = self._tr(p_in)
             in_low, in_high, in_close = self.l[p_in], self.h[p_in], self.c[p_in]
             in_vol = self.v[p_in]
-            in_rng = in_high - in_low
+            in_range = in_high - in_low
             in_bull, in_bear = self._bull(p_in), self._bear(p_in)
-            if in_rng == 0 or self._body_pct(p_in) < self.legInMinBodyPct:
+            if in_range == 0 or self._body_pct(p_in) < self.legInMinBodyPct:
                 continue
 
             if (in_bull and self._bear(p_prev)) or (in_bear and self._bull(p_prev)):
-                pbh, pbl = max(self.o[p_prev], self.c[p_prev]), min(self.o[p_prev], self.c[p_prev])
-                overlap = max(0.0, min(pbh, in_high) - max(pbl, in_low))
-                if overlap / in_rng >= self.rejectOppositeCoverPct:
+                previous_body_high = max(self.o[p_prev], self.c[p_prev])
+                previous_body_low = min(self.o[p_prev], self.c[p_prev])
+                overlap = max(0.0, min(previous_body_high, in_high) - max(previous_body_low, in_low))
+                if overlap / in_range >= self.rejectOppositeCoverPct:
                     continue
 
-            bull_clv = (in_close - in_low) / in_rng
-            bear_clv = (in_high - in_close) / in_rng
+            bull_clv = (in_close - in_low) / in_range
+            bear_clv = (in_high - in_close) / in_range
 
-            ok = True
+            valid_base = True
             max_base_tr = 0.0
             max_base_high = -1.0
             min_base_low = 1_000_000_000.0
-            for b in range(1, bc + 1):
-                pb = i - b
-                if np.isnan(self.atr[pb]):
-                    ok = False
+            for base_offset in range(1, base_count + 1):
+                p_base = i - base_offset
+                if np.isnan(self.atr[p_base]):
+                    valid_base = False
                     break
-                btr = self._tr(pb)
-                if btr > self.maxBaseAtrMult * self.atr[pb]:
-                    ok = False
+                base_tr = self._tr(p_base)
+                if base_tr > self.maxBaseAtrMult * self.atr[p_base]:
+                    valid_base = False
                     break
-                max_base_tr = max(max_base_tr, btr)
-                max_base_high = max(max_base_high, self.h[pb])
-                min_base_low = min(min_base_low, self.l[pb])
-            if not ok or max_base_tr == 0:
+                max_base_tr = max(max_base_tr, base_tr)
+                max_base_high = max(max_base_high, self.h[p_base])
+                min_base_low = min(min_base_low, self.l[p_base])
+            if not valid_base or max_base_tr == 0:
                 continue
 
-            eff_mult = 1.5 if bc == 1 else self.legInToBaseSizeMult
-            if leg_in_tr < eff_mult * max_base_tr:
+            effective_multiplier = 1.5 if base_count == 1 else self.legInToBaseSizeMult
+            if leg_in_tr < effective_multiplier * max_base_tr:
                 continue
-            if not (leg_in_tr >= self.legInMinAtrMult * self.atr[p_in]):
+            if leg_in_tr < self.legInMinAtrMult * self.atr[p_in]:
                 continue
 
             leg_out_tr = self._tr(p_out)
@@ -375,24 +616,28 @@ class ZoneEngine:
 
             explosive = leg_out_tr >= self.legOutTrMult * self.atr[p_out]
             wick_ok = self._wick_pct(p_out) <= self.maxWickPct
-            tr_hier = (leg_out_tr >= self.legOutMinTrRatio * leg_in_tr) and (leg_in_tr > max_base_tr)
-            vol_ok = out_vol > in_vol
+            tr_hierarchy_ok = (
+                leg_out_tr >= self.legOutMinTrRatio * leg_in_tr
+                and leg_in_tr > max_base_tr
+            )
+            volume_ok = out_vol > in_vol
             is_overnight = self._overnight(i)
 
-            has_imb = True
+            has_imbalance = True
             has_gap = False
             gap_size = 0.0
             if self.useImbalance:
                 if is_demand:
                     has_gap = out_low > max_base_high
-                    has_imb = has_gap or (out_close > in_high)
+                    has_imbalance = has_gap or (out_close > in_high)
                     gap_size = max(0.0, out_low - max_base_high)
                 else:
                     has_gap = out_high < min_base_low
-                    has_imb = has_gap or (out_close < in_low)
+                    has_imbalance = has_gap or (out_close < in_low)
                     gap_size = max(0.0, min_base_low - out_high)
 
-            if (min(out_open, out_close) <= min_base_low and max(out_open, out_close) >= max_base_high
+            if (min(out_open, out_close) <= min_base_low
+                    and max(out_open, out_close) >= max_base_high
                     and not has_gap):
                 continue
 
@@ -400,12 +645,13 @@ class ZoneEngine:
             is_dbr = in_bear and bear_clv >= self.minClvPct and is_demand
             is_dbd = in_bear and bear_clv >= self.minClvPct and is_supply
             is_rbd = in_bull and bull_clv >= self.minClvPct and is_supply
-            if not ((is_rbr or is_dbr or is_dbd or is_rbd) and explosive and wick_ok
-                    and tr_hier and vol_ok and has_imb):
+            if not (is_rbr or is_dbr or is_dbd or is_rbd):
+                continue
+            if not (explosive and wick_ok and tr_hierarchy_ok and volume_ok and has_imbalance):
                 continue
 
             score = 0
-            if bc == 1:
+            if base_count == 1:
                 score += 15
             if leg_in_tr >= self.hqLegInAtrMult * self.atr[p_in]:
                 score += 10
@@ -415,150 +661,192 @@ class ZoneEngine:
                 score += 15
             if out_vol > self.vol_sma[p_out]:
                 score += 10
-            out_rng = out_high - out_low
+            out_range = out_high - out_low
             if is_demand:
-                pos = (out_close - out_low) / out_rng if out_rng > 0 else 0
+                close_position = (out_close - out_low) / out_range if out_range > 0 else 0
                 own_body = self._body_pct(p_out)
                 if is_dbr:
-                    if pos >= 0.80 or own_body >= self.legOutBodyHeavyPct:
+                    if close_position >= 0.80 or own_body >= self.legOutBodyHeavyPct:
                         score += 15
-                elif pos >= 0.80:
+                elif close_position >= 0.80:
                     score += 15
             else:
-                pos = (out_high - out_close) / out_rng if out_rng > 0 else 0
-                if pos >= 0.80:
+                close_position = (out_high - out_close) / out_range if out_range > 0 else 0
+                if close_position >= 0.80:
                     score += 15
 
-            opp_base = False
-            for b in range(1, bc + 1):
-                if (is_demand and self._bear(i - b)) or (is_supply and self._bull(i - b)):
-                    opp_base = True
-                    break
-            if opp_base:
+            opposite_base = any(
+                (is_demand and self._bear(i - offset))
+                or (is_supply and self._bull(i - offset))
+                for offset in range(1, base_count + 1)
+            )
+            if opposite_base:
                 score += 10
             score += 10
             if has_gap:
                 score += self.genuineGapBonus
             if is_overnight and has_gap:
                 score += self.overnightGapBonus
-
             if score < self.minValidScore:
                 continue
 
-            prox = max_base_high if is_demand else min_base_low
-            dist = min_base_low if is_demand else max_base_high
-
+            proximal = max_base_high if is_demand else min_base_low
+            distal = min_base_low if is_demand else max_base_high
             if self.useEodRange:
                 eod_high = self.day_high[i] * (1 + self.eodHighBufferPct / 100.0)
                 eod_low = self.day_low[i] * (1 - self.eodLowBufferPct / 100.0)
-                if not (eod_low <= prox <= eod_high):
+                if not (eod_low <= proximal <= eod_high):
                     continue
 
-            is_hq = score >= self.hqScoreThreshold
-            found = True
-
-            sl = dist - self.slBufferAtr * atr_now if is_demand else dist + self.slBufferAtr * atr_now
-            risk = abs(prox - sl)
-            tp = prox + risk * self.targetRR if is_demand else prox - risk * self.targetRR
+            sl = (distal - self.slBufferAtr * atr_now if is_demand
+                  else distal + self.slBufferAtr * atr_now)
+            risk = abs(proximal - sl)
+            tp = (proximal + risk * self.targetRR if is_demand
+                  else proximal - risk * self.targetRR)
             if is_demand:
                 mid = out_high - self.testedLegOutRetracePct * (out_high - out_low)
+                leg_out_reward = out_high - proximal
             else:
                 mid = out_low + self.testedLegOutRetracePct * (out_high - out_low)
+                leg_out_reward = proximal - out_low
+            pattern = "RBR" if is_rbr else ("DBR" if is_dbr else ("DBD" if is_dbd else "RBD"))
+            category = "Continuation" if (is_rbr or is_dbd) else "Reversal"
 
-            dup = False
+            found = True
+            duplicate = False
             checked = 0
-            for z in reversed(self.live_zones):
-                if z.isDemand == is_demand and abs(z.proxVal - prox) < atr_now * 0.25:
-                    dup = True
+            for existing in reversed(self.live_zones):
+                if existing.isDemand == is_demand and abs(existing.proxVal - proximal) < atr_now * 0.25:
+                    duplicate = True
                     break
                 checked += 1
                 if checked >= 11:
                     break
-            if dup:
+            if duplicate:
                 continue
 
-            pattern = "RBR" if is_rbr else ("DBR" if is_dbr else ("DBD" if is_dbd else "RBD"))
-            cat = "Continuation" if (is_rbr or is_dbd) else "Reversal"
             border = "green" if is_demand else "red"
             fill = ("green", 0.15) if is_demand else ("red", 0.15)
-            vs_in, vs_out = self.vol_sma[p_in], self.vol_sma[p_out]
-            z = Zone(
-                proxVal=prox, distVal=dist, slVal=sl, tpVal=tp, isDemand=is_demand, isHQ=is_hq,
-                densityScore=score, patternType=pattern, zoneCategory=cat, state="Fresh",
-                touchCount=0, startBarIndex=i - bc, createdBarIndex=i, baseCount=bc,
-                legOutHigh=out_high, legOutLow=out_low, legOutMidLevel=mid,
-                isOvernight=is_overnight, legInTR=leg_in_tr, legOutTR=leg_out_tr,
-                zoneBox=Box(i - bc - 1, prox, i + 15, dist, border, fill),
+            vol_sma_in, vol_sma_out = self.vol_sma[p_in], self.vol_sma[p_out]
+            zone = Zone(
+                proxVal=proximal,
+                distVal=distal,
+                slVal=sl,
+                tpVal=tp,
+                isDemand=is_demand,
+                isHQ=bool(score >= self.hqScoreThreshold),
+                densityScore=score,
+                patternType=pattern,
+                zoneCategory=category,
+                state="Fresh",
+                touchCount=0,
+                startBarIndex=i - base_count,
+                createdBarIndex=i,
+                baseCount=base_count,
+                legOutHigh=out_high,
+                legOutLow=out_low,
+                legOutMidLevel=mid,
+                isOvernight=is_overnight,
+                legInTR=leg_in_tr,
+                legOutTR=leg_out_tr,
+                zoneBox=Box(i - base_count - 1, proximal, i + 15, distal, border, fill),
                 timestamp=self.df.index[i],
-                riskPct=risk / prox * 100.0 if prox else float("nan"),
+                riskPct=risk / proximal * 100.0 if proximal else float("nan"),
                 score10=round(score / 10.0, 1),
-                hasGenuineGap=has_gap, gapToLegIn=gap_size,
-                legInVolX=in_vol / vs_in if vs_in and not np.isnan(vs_in) else float("nan"),
-                legOutVolX=out_vol / vs_out if vs_out and not np.isnan(vs_out) else float("nan"),
+                hasGenuineGap=has_gap,
+                gapToLegIn=gap_size,
+                legInVolX=(in_vol / vol_sma_in if vol_sma_in and not np.isnan(vol_sma_in) else float("nan")),
+                legOutVolX=(out_vol / vol_sma_out if vol_sma_out and not np.isnan(vol_sma_out) else float("nan")),
+                legOutReward=float(leg_out_reward),
+                legInBarIndex=int(p_in),
+                legInHigh=float(in_high),
+                legInLow=float(in_low),
+                legOutClose=float(out_close),
             )
-            self.active_zones.append(z)
-            self.live_zones.append(z)
+            self.active_zones.append(zone)
+            self.live_zones.append(zone)
+            self.pattern_registry.append(zone)
 
-    # ---------------- STATE TRACKING (User rule) ---------------------------
-    # Fresh  -> Tested : price proximal line (proxVal) ko chhuye
-    # Tested -> Broken : sirf distal line (distVal) toote
-    # Fresh  -> Broken : distal seedha toot jaye (proximal touch ke bina)
-    # -----------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # STATE TRACKING
+    #   Fresh --(tested trigger touch)--> Tested
+    #        tested trigger = proximal YA leg-out mid, jo pehle aaye (DEFAULT),
+    #        ya sirf ek (testedBasis preset se).
+    #   Fresh ya Tested --(distal line touch/break)--> Broken   <-- Broken SIRF yahan
+    #   useMaxTestedCountBreak=True hone par hi Tested zone touches se auto-Broken
+    #   hota hai; DEFAULT False hai, isliye zone tab tak active rehta hai jab tak
+    #   price distal line ko chhu kar tod na de.
+    # ------------------------------------------------------------------
     def _update_states(self, i: int) -> None:
         if not self.live_zones:
             return
-        lo, hi = self.l[i], self.h[i]
+        low, high = self.l[i], self.h[i]
         for k in range(len(self.live_zones) - 1, -1, -1):
-            z = self.live_zones[k]
+            zone = self.live_zones[k]
+            # Zone leg-out candle complete hone ke BAAD se hi test/break hota hai
+            # (aapka rule: "zone sirf leg-out candle complete hone par valid").
+            # Creation bar (leg-out khud) apne hi range se zone ko Tested/Broken
+            # nahi karta -- warna har naya zone usi candle par Tested dikhta.
+            if zone.createdBarIndex == i:
+                zone.zoneBox.set_right(i + 15)
+                continue
+            tested_level = self._tested_trigger(zone)
 
-            if z.state == "Fresh":
-                if z.isDemand:
-                    if lo <= z.distVal:
-                        z.state = "Broken"
-                        z.breakReason = "distal_break_before_test"
-                    elif lo <= z.proxVal:
-                        z.state = "Tested"
-                        z.touchCount += 1
-                        if z.entryBarIndex is None:
-                            z.entryBarIndex = i
-                            z.entryTimestamp = self.df.index[i]
+            if zone.state == "Fresh":
+                if zone.isDemand:
+                    if low <= zone.distVal:
+                        zone.state = "Broken"
+                        zone.breakReason = "distal_break_before_test"
+                    elif low <= tested_level:
+                        zone.state = "Tested"
+                        zone.touchCount += 1
+                        zone.isFresh = False
                 else:
-                    if hi >= z.distVal:
-                        z.state = "Broken"
-                        z.breakReason = "distal_break_before_test"
-                    elif hi >= z.proxVal:
-                        z.state = "Tested"
-                        z.touchCount += 1
-                        if z.entryBarIndex is None:
-                            z.entryBarIndex = i
-                            z.entryTimestamp = self.df.index[i]
+                    if high >= zone.distVal:
+                        zone.state = "Broken"
+                        zone.breakReason = "distal_break_before_test"
+                    elif high >= tested_level:
+                        zone.state = "Tested"
+                        zone.touchCount += 1
+                        zone.isFresh = False
 
-            elif z.state == "Tested":
-                if z.isDemand:
-                    if lo <= z.distVal:
-                        z.state = "Broken"
-                        z.breakReason = "distal_break"
-                    elif lo <= z.proxVal:
-                        z.touchCount += 1
+            elif zone.state == "Tested":
+                if zone.isDemand:
+                    if low <= zone.distVal:
+                        zone.state = "Broken"
+                        zone.breakReason = "distal_break"
+                    elif low <= tested_level:
+                        zone.touchCount += 1
                 else:
-                    if hi >= z.distVal:
-                        z.state = "Broken"
-                        z.breakReason = "distal_break"
-                    elif hi >= z.proxVal:
-                        z.touchCount += 1
+                    if high >= zone.distVal:
+                        zone.state = "Broken"
+                        zone.breakReason = "distal_break"
+                    elif high >= tested_level:
+                        zone.touchCount += 1
 
-            # Purana maxTestedCount auto-break (requirement ke hisab se band):
-            # if z.state == "Tested" and z.touchCount > self.maxTestedCount:
-            #     z.state = "Broken"
-            #     z.breakReason = "max_tested_count"
+            # DEFAULT OFF: zone tab tak active rehta hai jab tak price distal
+            # line ko chhu kar tod na de. (Auto-break sirf tab jab param True ho.)
+            if (self.useMaxTestedCountBreak and zone.state == "Tested"
+                    and zone.touchCount > self.maxTestedCount):
+                zone.state = "Broken"
+                zone.breakReason = "max_tested_count"
 
-            if z.state == "Broken":
-                z.breakBarIndex = i
-                z.zoneBox.set_bgcolor(("gray", 0.05))
-                z.zoneBox.set_border_color(("gray", 0.20))
+            if zone.state == "Broken":
+                zone.breakBarIndex = i
+                zone.isFresh = False
+                zone.zoneBox.set_bgcolor(("gray", 0.05))
+                zone.zoneBox.set_border_color(("gray", 0.20))
                 self.live_zones.pop(k)
             else:
-                z.zoneBox.set_right(i + 15)
+                # entry tracking (scanner-only): ENTRY line (proximal) chhute hi mark
+                if zone.entryBarIndex is None:
+                    touched_prox = (low <= zone.proxVal) if zone.isDemand else (high >= zone.proxVal)
+                    if touched_prox:
+                        zone.entryBarIndex = i
+                        zone.entryTimestamp = self.df.index[i]
+                        zone.entryPrice = zone.proxVal
+                        zone.entryStatus = "ENTERED_FRESH"
+                zone.zoneBox.set_right(i + 15)
 
     def run(self) -> List[Zone]:
         min_bar = max(self.atrPeriod, self.maxBaseCount + 3, 11)
@@ -573,25 +861,61 @@ def settings(accountCapital: Optional[float] = None, **overrides: Any) -> Dict[s
     result = dict(PINE_DEFAULTS)
     if accountCapital is not None:
         overrides["accountCapital"] = accountCapital
-    for k, v in overrides.items():
-        if k in PINE_DEFAULTS:
-            result[k] = v
+    for key, value in overrides.items():
+        if key in PINE_DEFAULTS:
+            result[key] = value
     result["accountCapital"] = _positive_float(result["accountCapital"], "accountCapital")
     return result
 
 
-def scan_zones(df: pd.DataFrame, params: Optional[Dict[str, Any]] = None,
-               accountCapital: Optional[float] = None, tf: Optional[str] = None) -> List[Zone]:
+def scan_zones(
+    df: pd.DataFrame,
+    params: Optional[Dict[str, Any]] = None,
+    accountCapital: Optional[float] = None,
+    tf: Optional[str] = None,
+) -> List[Zone]:
     incoming = dict(params or {})
     if accountCapital is not None:
         incoming["accountCapital"] = accountCapital
-    cfg = settings(**incoming)
-    return ZoneEngine(df, **cfg).run()
+    config = settings(**incoming)
+    return ZoneEngine(df, **config).run()
 
 
 def latest_active_zones(zones: List[Zone]) -> List[Zone]:
-    return [z for z in zones if z.state in ("Fresh", "Tested")]
+    return [zone for zone in zones if zone.state in ("Fresh", "Tested")]
 
 
 def high_quality_zones(zones: List[Zone]) -> List[Zone]:
-    return [z for z in zones if z.isHQ]
+    return [zone for zone in zones if zone.isHQ]
+
+
+def fresh_zones(zones: List[Zone]) -> List[Zone]:
+    return [zone for zone in zones if zone.state == "Fresh" and zone.isFresh]
+
+
+def summarize_zones(zones: List[Zone]) -> pd.DataFrame:
+    if not zones:
+        return pd.DataFrame()
+    rows = []
+    for zone in zones:
+        rows.append({
+            "timestamp": zone.timestamp,
+            "pattern": zone.patternType,
+            "category": zone.zoneCategory,
+            "side": "Demand" if zone.isDemand else "Supply",
+            "state": zone.state,
+            "touches": zone.touchCount,
+            "proximal": zone.proxVal,
+            "distal": zone.distVal,
+            "sl": zone.slVal,
+            "tp": zone.tpVal,
+            "risk_pct": zone.riskPct,
+            "legOutRR": zone.legOutReward / abs(zone.proxVal - zone.slVal) if zone.proxVal != zone.slVal else float("nan"),
+            "score": zone.densityScore,
+            "HQ": zone.isHQ,
+            "entry_bar": zone.entryBarIndex,
+            "entry_price": zone.entryPrice,
+            "break_reason": zone.breakReason,
+            "break_bar": zone.breakBarIndex,
+        })
+    return pd.DataFrame(rows)
