@@ -103,6 +103,14 @@ def get_nse_announcements(symbol: str = None, days: int = 7) -> pd.DataFrame:
             })
         
         df = pd.DataFrame(rows)
+        # USER RULE: sirf NSE F&O universe ke announcements (baaki equities noise hai)
+        try:
+            from powerful_news_fetcher import get_fno_symbol_set
+            fno = get_fno_symbol_set()
+            if not df.empty and "symbol" in df.columns:
+                df = df[df["symbol"].astype(str).str.upper().str.strip().isin(fno)]
+        except Exception:
+            pass  # universe list na mile to purana behaviour (filter skip)
         # Filter last N days if date available
         return df.head(100)
     except Exception as e:

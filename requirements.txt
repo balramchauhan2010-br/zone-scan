@@ -19,5 +19,6 @@ streamlit-autorefresh>=1.0.0
 
 # Secure optional - Dhan + Gemini (bina key ke bhi app fast chalega)
 dhanhq>=2.0.0
-google-generativeai>=0.5.0
+# Gemini ab direct REST API se jaata hai (requests) - purana google-generativeai
+# SDK deprecated hai aur gemini-1.5 models band ho chuke hain (gemini_analyzer.py dekho)
 python-dotenv>=1.0.0
