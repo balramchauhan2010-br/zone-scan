@@ -77,7 +77,27 @@ def load_dhan_master_fast():
             "RELIANCE": {"security_id": "11536", "segment": "NSE_EQ"},
         }
 
-@st.cache_data(show_spinner=False, ttl=60)  # 60 sec cache - fast LTP
+def get_dhan_client(client_id: str, access_token: str):
+    """SINGLETON dhanhq client (cache_resource) - har call par naya connection
+    banane se latency hoti thi; ab ek hi client reuse hota hai."""
+    try:
+        return _get_dhan_client_cached(client_id, access_token)
+    except Exception as e:
+        print(f"Dhan singleton client error: {e}")
+        return None
+
+
+@st.cache_resource(show_spinner=False)
+def _get_dhan_client_cached(client_id: str, access_token: str):
+    try:
+        from dhanhq import dhanhq
+        return dhanhq(client_id, access_token)
+    except Exception as e:
+        print(f"Dhan client create error: {e}")
+        return None
+
+
+@st.cache_data(show_spinner=False, ttl=5)  # 5 sec cache - real-time feel (pehle 60s tha = purana price)
 def get_dhan_ltp_fast(client_id: str, access_token: str, symbols: tuple):
     """
     FAST LTP from Dhan - no delay, real-time, batch request
@@ -87,8 +107,9 @@ def get_dhan_ltp_fast(client_id: str, access_token: str, symbols: tuple):
     if not DHAN_AVAILABLE:
         return {}
     try:
-        from dhanhq import dhanhq
-        dhan = dhanhq(client_id, access_token)
+        dhan = get_dhan_client(client_id, access_token)
+        if dhan is None:
+            return {}
         master = load_dhan_master_fast()
         
         # Group by segment

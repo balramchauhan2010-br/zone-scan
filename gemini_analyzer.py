@@ -1,86 +1,144 @@
 """
-gemini_analyzer.py
-Gemini API se Zone + News + Events ka powerful analysis
+gemini_analyzer.py - Gemini REST client (2026-ready, SDK-free)
 
-Install: pip install google-generativeai
-API Key: https://aistudio.google.com/app/apikey
+KYU BADLA: purana code `gemini-1.5-flash` model + `google-generativeai` SDK
+use karta tha. Google ne Gemini 1.5 models Sept-2025 me shut down kar diye
+aur wo SDK bhi deprecated hai - isliye AI features kaam hi nahi kar rahe the.
+
+AB: koi SDK dependency nahi - seedha Gemini REST API (requests pehle se
+dependency hai). Default model: **gemini-3.5-flash** (stable).
+
+Model badalna ho to (.streamlit/secrets.toml me, gitignored):
+    [gemini]
+    api_key = "AIza..."
+    model   = "gemini-3.8-flash"     # ya env var GEMINI_MODEL
+
+PUBLIC API same rakhi gayi hai (app.py ke purane calls bina badle chalenge):
+- GeminiZoneAnalyzer(api_key=..., model=...)  -> .model.generate_content(prompt).text
+- .analyze_single_zone(), .analyze_batch_zones(), .market_overview_analysis()
+- get_gemini(), quick_hindi_translate(), get_gemini_hypothesis_for_news()
 """
 
-import os
-from typing import List, Dict, Optional
-import pandas as pd
 import json
+import os
+from typing import Optional
 
-try:
-    import google.generativeai as genai
-    GEMINI_AVAILABLE = True
-except ImportError:
-    GEMINI_AVAILABLE = False
+import pandas as pd
+import requests
+
+API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+DEFAULT_MODEL = "gemini-3.5-flash"   # stable; purana gemini-1.5-flash band ho chuka hai
+REQUEST_TIMEOUT = 30
+
+
+def get_model_name() -> str:
+    """secrets [gemini].model -> env GEMINI_MODEL -> DEFAULT_MODEL"""
+    try:
+        import streamlit as st
+        val = st.secrets["gemini"]["model"]
+        if val and str(val).strip():
+            return str(val).strip()
+    except Exception:
+        pass
+    val = os.getenv("GEMINI_MODEL")
+    if val and val.strip():
+        return val.strip()
+    return DEFAULT_MODEL
+
+
+def _post_generate(api_key: str, model: str, prompt: str) -> str:
+    """REST call -> generated text (fail par informative exception)."""
+    url = f"{API_BASE}/{model}:generateContent"
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    resp = requests.post(
+        url,
+        params={"key": api_key},
+        json=payload,
+        timeout=REQUEST_TIMEOUT,
+        headers={"Content-Type": "application/json"},
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"Gemini API {resp.status_code}: {resp.text[:200]}")
+    data = resp.json()
+    try:
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception:
+        raise RuntimeError(f"Gemini API unexpected response: {str(data)[:200]}")
+
+
+class _RestResponse:
+    """Purane SDK jaisa object - sirf .text attribute chahiye."""
+    def __init__(self, text: str):
+        self.text = text
+
+
+class _RestModel:
+    """Backward-compat: app.py kahin-kahin `gemini_client.model.generate_content(prompt).text`
+    directly call karta hai - ye wrapper wahi interface deta hai."""
+
+    def __init__(self, api_key: str, model: str):
+        self.api_key = api_key
+        self.model_name = model
+
+    def generate_content(self, prompt: str) -> _RestResponse:
+        return _RestResponse(_post_generate(self.api_key, self.model_name, prompt))
+
+
+def _extract_json(text: str):
+    """Markdown code-block hata kar JSON parse karo (nahi to raw dict)."""
+    if "```json" in text:
+        text = text.split("```json")[1].split("```")[0].strip()
+    elif "```" in text:
+        text = text.split("```")[1].split("```")[0].strip()
+    return json.loads(text)
+
 
 class GeminiZoneAnalyzer:
-    def __init__(self, api_key: str = None, model: str = "gemini-1.5-flash"):
+    def __init__(self, api_key: str = None, model: str = None):
         """
         api_key: Gemini API key - https://aistudio.google.com/app/apikey
-        model: gemini-1.5-flash (fast, cheap) ya gemini-1.5-pro (powerful)
-        Streamlit secrets me rakho: st.secrets["GEMINI_API_KEY"]
+        model: default gemini-3.5-flash (fast, sasta). Pro chahiye to secrets me
+               `model = "gemini-3-pro"` set karo ya yahan pass karo.
         """
-        if not GEMINI_AVAILABLE:
-            raise ImportError("google-generativeai install karo: pip install google-generativeai")
-        
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        try:
+            from secure_config import get_gemini_key  # secure: secrets/env only
+            self.api_key = api_key or get_gemini_key()
+        except Exception:
+            self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         if not self.api_key:
             raise ValueError("GEMINI_API_KEY chahiye. https://aistudio.google.com/app/apikey se lo.")
-        
-        genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel(model)
-        self.model_name = model
-    
-    def analyze_single_zone(self, zone_info: dict, news_df: pd.DataFrame = None, 
+        self.model_name = model or get_model_name()
+        # IMPORTANT: attribute ka naam `.model` hi rakha hai taaki app.py ke
+        # purane `gemini_client.model.generate_content(...)` calls na tootein.
+        self.model = _RestModel(self.api_key, self.model_name)
+
+    def analyze_single_zone(self, zone_info: dict, news_df: pd.DataFrame = None,
                             corp_actions: pd.DataFrame = None, market_breadth: dict = None) -> dict:
         """
         Ek zone ka deep analysis Gemini se
-        
-        zone_info: {
-            "symbol": "RELIANCE",
-            "timeframe": "15m",
-            "direction": "DEMAND (Buy Zone)",
-            "pattern": "RBR",
-            "entry": 2800.5,
-            "sl": 2780.0,
-            "target": 2860.0,
-            "distance_pct": -0.8,
-            "state": "Fresh",
-            "score": 85,
-            "isHQ": True,
-            "legOutRR": 3.2,
-            "pulse": 1,
-            "trend": 1,
-            "aligned": True
-        }
-        news_df: NSE announcements / global news
-        corp_actions: dividend, bonus, split
-        market_breadth: {"up": 120, "down": 93, "total": 213}
+
+        zone_info: {"symbol","timeframe","direction","pattern","entry","sl",
+                    "target","distance_pct","state","score","isHQ","legOutRR",
+                    "pulse","trend","aligned"}
         """
-        
-        # Context banao
         news_text = ""
         if news_df is not None and not news_df.empty:
-            news_text = "\n".join([f"- {row.get('desc') or row.get('title')} ({row.get('date') or row.get('published')})" 
+            news_text = "\n".join([f"- {row.get('desc') or row.get('title')} ({row.get('date') or row.get('published')})"
                                    for _, row in news_df.head(5).iterrows()])
         else:
             news_text = "No recent news"
-        
+
         corp_text = ""
         if corp_actions is not None and not corp_actions.empty:
-            corp_text = "\n".join([f"- {row.get('purpose')} ex: {row.get('ex_date')}" 
+            corp_text = "\n".join([f"- {row.get('purpose')} ex: {row.get('ex_date')}"
                                    for _, row in corp_actions.head(3).iterrows()])
         else:
             corp_text = "No corporate actions in next 30 days"
-        
+
         breadth_text = ""
         if market_breadth:
             breadth_text = f"NSE F&O Breadth: Up {market_breadth.get('up')} Down {market_breadth.get('down')} Total {market_breadth.get('total')}"
-        
+
         prompt = f"""
 You are an expert NSE F&O Supply/Demand Zone trader and analyst. Analyze this zone with news, events, corporate actions.
 
@@ -118,36 +176,26 @@ Respond in JSON format:
   "news_impact": "News ka zone par kya impact"
 }}
 """
-
         try:
-            response = self.model.generate_content(prompt)
-            text = response.text.strip()
-            # Try to parse JSON, agar JSON nahi to raw text return
+            text = _post_generate(self.api_key, self.model_name, prompt).strip()
             try:
-                # Remove markdown code blocks if present
-                if "```json" in text:
-                    text = text.split("```json")[1].split("```")[0].strip()
-                elif "```" in text:
-                    text = text.split("```")[1].split("```")[0].strip()
-                result = json.loads(text)
-                return result
-            except:
+                return _extract_json(text)
+            except Exception:
                 return {"raw_response": text, "tradable": None, "confidence": 0}
         except Exception as e:
             return {"error": str(e), "tradable": None, "confidence": 0}
 
-    def analyze_batch_zones(self, zones_df: pd.DataFrame, max_zones: int = 10, 
+    def analyze_batch_zones(self, zones_df: pd.DataFrame, max_zones: int = 10,
                             news_fetcher=None, corp_fetcher=None, breadth: dict = None) -> pd.DataFrame:
         """
         Top N zones ka batch analysis - cost bachane ke liye sirf nearest zones ka karo
-        zones_df: aapke scanner ka combined DataFrame
+        zones_df: scanner ka combined DataFrame
         """
         if zones_df.empty:
             return pd.DataFrame()
-        
-        # Sirf nearest 10 zones ka analysis (cost + time bachao)
+
         top_zones = zones_df.sort_values("Distance %", key=lambda s: s.abs()).head(max_zones)
-        
+
         results = []
         for idx, row in top_zones.iterrows():
             zone_info = {
@@ -167,23 +215,22 @@ Respond in JSON format:
                 "trend": row.get("Trend"),
                 "aligned": row.get("Aligned?"),
             }
-            
-            # Fetch news/corp for this symbol if fetcher provided
+
             news_df = None
             corp_df = None
             if news_fetcher:
                 try:
                     news_df = news_fetcher(zone_info["symbol"])
-                except:
+                except Exception:
                     pass
             if corp_fetcher:
                 try:
                     corp_df = corp_fetcher(zone_info["symbol"])
-                except:
+                except Exception:
                     pass
-            
+
             analysis = self.analyze_single_zone(zone_info, news_df, corp_df, breadth)
-            
+
             results.append({
                 "Symbol": zone_info["symbol"],
                 "Timeframe": zone_info["timeframe"],
@@ -197,7 +244,7 @@ Respond in JSON format:
                 "Verdict": analysis.get("verdict"),
                 "Reasoning": analysis.get("reasoning_hinglish") or analysis.get("raw_response", "")[:200],
             })
-        
+
         return pd.DataFrame(results)
 
     def market_overview_analysis(self, breadth: dict, nifty_zone: dict, top_zones: pd.DataFrame) -> str:
@@ -219,54 +266,27 @@ Respond in JSON format:
         Hinglish me, short and powerful.
         """
         try:
-            resp = self.model.generate_content(prompt)
-            return resp.text
+            return _post_generate(self.api_key, self.model_name, prompt)
         except Exception as e:
             return f"Error: {e}"
 
-# ---------- Streamlit Integration Example ----------
-"""
-import streamlit as st
-from gemini_analyzer import GeminiZoneAnalyzer
-from news_corporate_events import get_nse_announcements, get_nse_corporate_actions
 
-# Secrets
-GEMINI_KEY = st.secrets["GEMINI_API_KEY"]
-
-@st.cache_resource
+# ---------- Streamlit Integration ----------
 def get_gemini():
-    return GeminiZoneAnalyzer(api_key=GEMINI_KEY, model="gemini-1.5-flash")
+    """Cached analyzer (key na ho to None - app fast chalega, crash nahi)."""
+    try:
+        import streamlit as st
 
-gemini = get_gemini()
+        @st.cache_resource(show_spinner=False)
+        def _build():
+            try:
+                return GeminiZoneAnalyzer()
+            except Exception:
+                return None
+        return _build()
+    except Exception:
+        return None
 
-# Jab user Validated Zones page par ho aur top 10 zones ka analysis chahiye
-if st.button("🤖 Gemini se Top 10 Zones ka Analysis Karo"):
-    with st.spinner("Gemini analysis chal raha hai..."):
-        # Breadth
-        breadth = {"up": 54, "down": 157, "flat": 2, "total": 213}
-        
-        # Batch analysis
-        analysis_df = gemini.analyze_batch_zones(
-            zones_df=combined_v,  # aapka validated combined DataFrame
-            max_zones=10,
-            news_fetcher=lambda sym: get_nse_announcements(symbol=sym, days=7),
-            corp_fetcher=lambda sym: get_nse_corporate_actions(symbol=sym, days=30),
-            breadth=breadth
-        )
-        
-        st.dataframe(analysis_df, width="stretch")
-        
-        # Har zone ka detail expander
-        for idx, row in analysis_df.iterrows():
-            with st.expander(f"{row['Symbol']} - {row['Verdict']} (Confidence {row['Confidence']}%)"):
-                st.write(row['Reasoning'])
-                st.write(f"Risk: {row['Risk']} | Sentiment: {row['Sentiment']}")
-
-# Market overview
-if st.button("🌅 Aaj ka Market Overview Gemini se"):
-    overview = gemini.market_overview_analysis(breadth, nifty_zone, combined_v)
-    st.info(overview)
-"""
 
 # ---------- Hindi Translation + News Hypothesis (for Bottom Big Box) ----------
 def quick_hindi_translate(text: str, api_key: str = None) -> str:
@@ -276,17 +296,15 @@ def quick_hindi_translate(text: str, api_key: str = None) -> str:
         if not is_gemini_configured() and not api_key:
             return text  # fallback English if no Gemini
         key = api_key or get_gemini_key()
-        if not key or not GEMINI_AVAILABLE:
+        if not key:
             return text
-        import google.generativeai as genai
-        genai.configure(api_key=key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        prompt = f"Translate this NSE market news to Hindi in short headline style (max 25 words), keep symbol names in English:\n\n{text}\n\nHindi:"
-        resp = model.generate_content(prompt)
-        hindi = resp.text.strip()[:300]
+        prompt = (f"Translate this NSE market news to Hindi in short headline style "
+                  f"(max 25 words), keep symbol names in English:\n\n{text}\n\nHindi:")
+        hindi = _post_generate(key, get_model_name(), prompt).strip()[:300]
         return hindi
     except Exception:
         return text  # fallback
+
 
 def get_gemini_hypothesis_for_news(symbol: str, news_text: str, api_key: str = None) -> dict:
     """Har news ka AI hypothesis Hindi me - Bullish/Bearish/Neutral + Reason"""
@@ -295,11 +313,8 @@ def get_gemini_hypothesis_for_news(symbol: str, news_text: str, api_key: str = N
         if not is_gemini_configured() and not api_key:
             return {"bias": "Neutral", "reason_hindi": "Gemini connect nahi hai - rule based analysis", "impact": "Medium"}
         key = api_key or get_gemini_key()
-        if not key or not GEMINI_AVAILABLE:
-            return {"bias": "Neutral", "reason_hindi": "Gemini library nahi hai", "impact": "Medium"}
-        import google.generativeai as genai
-        genai.configure(api_key=key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        if not key:
+            return {"bias": "Neutral", "reason_hindi": "Gemini key nahi hai", "impact": "Medium"}
         prompt = f"""
 You are NSE expert. Symbol: {symbol}, News: {news_text}
 
@@ -310,25 +325,17 @@ Example: {{"bias": "Bullish 📈", "reason_hindi": "अच्छे नतीज
 
 JSON only:
 """
-        resp = model.generate_content(prompt)
-        txt = resp.text.strip()
-        # Clean markdown
-        if "```json" in txt:
-            txt = txt.split("```json")[1].split("```")[0].strip()
-        elif "```" in txt:
-            txt = txt.split("```")[1].split("```")[0].strip()
+        txt = _post_generate(key, get_model_name(), prompt).strip()
         try:
-            data = json.loads(txt)
-            return data
-        except:
-            # Fallback parse
+            return _extract_json(txt)
+        except Exception:
             return {"bias": "Neutral", "reason_hindi": txt[:200], "impact": "Medium"}
     except Exception as e:
         return {"bias": "Neutral", "reason_hindi": f"Error: {e}", "impact": "Low"}
 
 # ---------- Cost Saving Tips ----------
 """
-1. gemini-1.5-flash use karo (pro se 10x sasta, fast)
+1. gemini-3.5-flash use karo (pro se sasta, fast) - secrets me model badal sakte ho
 2. Sirf Top 10 nearest zones ka analysis karo, 500 zones ka nahi
 3. Cache karo: @st.cache_data(ttl=3600) se Gemini response ko 1 ghante tak cache
 4. Batch me 1 hi prompt me 5 zones bhejo, alag-alag nahi (prompt me list de do)

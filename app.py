@@ -458,6 +458,21 @@ with settings_pop:
     elif not st.session_state.auto_refresh_enabled:
         st.caption("⏸️ Auto-Refresh OFF")
 
+    # Live LTP fast update (latency fix): tape + table ka LTP market hours me
+    # har kuch second live update hota hai - candle close ka intezaar nahi.
+    st.markdown("---")
+    st.subheader("⚡ Live LTP Fast Update")
+    st.session_state.live_ltp_refresh = st.toggle(
+        "Live LTP update ON (market hours)", value=st.session_state.get("live_ltp_refresh", True),
+        key="live_ltp_toggle",
+        help="Top tape aur table ka LTP/Dist% live refresh hota hai (Dhan connected ho to Dhan real-time se, warna Yahoo)")
+    st.select_slider("Live update interval", options=["5s", "10s", "15s", "30s"],
+                     value=st.session_state.get("live_ltp_interval", "10s"), key="live_ltp_interval_slider")
+    if is_dhan_configured():
+        st.caption("✅ Dhan connected - real-time quotes (5s cache)")
+    else:
+        st.caption("ℹ️ Dhan key nahi hai - Yahoo se update (Dhan se ~15min fast ho sakta hai, Settings me key daalo)")
+
     with st.expander("🗄️ Cache / Refresh", expanded=False):
         force_rescan = st.button("🔄 Force Rescan (bypass cache)", width="stretch")
 
@@ -523,22 +538,23 @@ def cached_fetch_daily(bk, tt):
         return {}
 
 
-@st.cache_data(show_spinner=False, ttl=60)
+@st.cache_data(show_spinner=False, ttl=5)  # 5s - real-time LTP (Dhan connected ho to)
 def cached_dhan_ltp_if_available(tickers_tuple):
-    """Live price - Dhan se agar connected hai to Dhan se, nahi to Yahoo se - Secure"""
+    """Live price - Dhan se agar connected hai to Dhan se, nahi to khali dict
+    (Yahoo path fast_live_price se alag se aata hai) - Secure"""
     if is_dhan_configured():
         try:
-            from dhan_api_helper import DhanHelper, load_dhan_master
+            from dhan_api_helper import get_dhan_ltp_fast
             cid, token = get_dhan_creds()
-            dhan = DhanHelper(client_id=cid, access_token=token)
-            return {}
+            syms = tuple(str(t).replace(".NS", "") for t in tickers_tuple)
+            return get_dhan_ltp_fast(cid, token, syms) or {}
         except Exception as e:
             print(f"Dhan LTP error (secure): {e}")
             return {}
     return {}
 
 
-@st.cache_data(show_spinner=False, ttl=10)  # 10 sec cache
+@st.cache_data(show_spinner=False, ttl=5)  # 5s - tape live feel (pehle 10s)
 def cached_market_watch():
     """Market Watch ULTRA FAST: Dhan > NSE Live > Yahoo Parallel - app band nahi hoga"""
     try:
@@ -995,6 +1011,33 @@ def _badge(label, value, color):
     return f'<span style="background:{color}22;border:1px solid {color};border-radius:6px;padding:4px 10px;margin:3px;display:inline-block;font-size:13px;color:#eaeaea;white-space:nowrap;"><b>{label}</b> {value}</span>'
 
 
+@st.cache_data(show_spinner=False, ttl=300)  # 5 min - TLT slow-moving bond ETF, baar-baar fetch bekaar
+def _tlt_quote_cached():
+    """TLT quote (cached) - pehle har rerun par bina-cache yfinance call thi = tape latency."""
+    try:
+        import yfinance as yf
+        hist = yf.Ticker("TLT").history(period="2d")
+        if hist is not None and not hist.empty and len(hist) >= 2:
+            last = float(hist["Close"].iloc[-1])
+            prev = float(hist["Close"].iloc[-2])
+            return last, ((last - prev) / prev * 100 if prev else 0.0)
+    except Exception:
+        pass
+    try:
+        if GLOBAL_AVAILABLE:
+            from global_macro_fetcher import get_world_indices
+            world_df = get_world_indices()
+            if not world_df.empty and "symbol" in world_df.columns:
+                tlt_row = world_df[world_df["symbol"].str.contains("TLT", na=False)]
+                if not tlt_row.empty:
+                    last = float(tlt_row["price"].iloc[0]) if "price" in tlt_row.columns else 0.0
+                    chg = float(tlt_row["change_pct"].iloc[0]) if "change_pct" in tlt_row.columns else 0.0
+                    return last, chg
+    except Exception:
+        pass
+    return None
+
+
 def render_market_watch():
     """Top tape: GIFT NIFTY, NIFTY, BANK NIFTY, USD/INR, XAUUSD, SPOTCRUDE + TLT + FII/DII"""
     quotes = {}
@@ -1018,43 +1061,24 @@ def render_market_watch():
     for item in gi.MARKET_WATCH:
         q = quotes.get(item["yahoo"])
         url = f"https://www.tradingview.com/chart/?symbol={item['tv'].replace(':', '%3A')}"
+        lbl = "GIFT NIFTY*" if item["label"] == "GIFT NIFTY" else item["label"]  # * = proxy, caption me note
         if q:
             last, chg = q
             color = "#16c784" if chg >= 0 else "#ea3943"
             arrow = "▲" if chg >= 0 else "▼"
-            inner = _badge(item["label"], f'{last:,.2f} <span style="color:{color};">{arrow} {chg:+.2f}%</span>', color)
+            inner = _badge(lbl, f'{last:,.2f} <span style="color:{color};">{arrow} {chg:+.2f}%</span>', color)
         else:
-            inner = _badge(item["label"], "--", "#555")
+            inner = _badge(lbl, "--", "#555")
         chips.append(f'<a href="{url}" target="_blank" style="text-decoration:none;">{inner}</a>')
 
-    # TLT badge
+    # TLT badge (CACHED - pehle har rerun par bina cache yfinance call lag rahi thi = tape slow)
     try:
-        try:
-            import yfinance as yf
-            tlt_ticker = yf.Ticker("TLT")
-            hist = tlt_ticker.history(period="2d")
-            if not hist.empty and len(hist) >= 2:
-                last = float(hist["Close"].iloc[-1])
-                prev = float(hist["Close"].iloc[-2])
-                chg = (last - prev) / prev * 100 if prev != 0 else 0
-                arrow = "▲" if chg >= 0 else "▼"
-                color = "#16c784" if chg >= 0 else "#ea3943"
-                chips.append(_badge("TLT", f'{last:.2f} <span style="color:{color};">{arrow} {chg:+.2f}%</span>', color))
-        except Exception:
-            try:
-                if GLOBAL_AVAILABLE:
-                    from global_macro_fetcher import get_world_indices
-                    world_df = get_world_indices()
-                    if not world_df.empty:
-                        tlt_row = world_df[world_df["symbol"].str.contains("TLT", na=False)] if "symbol" in world_df.columns else pd.DataFrame()
-                        if not tlt_row.empty:
-                            last = float(tlt_row["price"].iloc[0]) if "price" in tlt_row.columns else 0
-                            chg = float(tlt_row["change_pct"].iloc[0]) if "change_pct" in tlt_row.columns else 0
-                            arrow = "▲" if chg >= 0 else "▼"
-                            color = "#16c784" if chg >= 0 else "#ea3943"
-                            chips.append(_badge("TLT", f'{last:.2f} <span style="color:{color};">{arrow} {chg:+.2f}%</span>', color))
-            except Exception:
-                pass
+        _tlt = _tlt_quote_cached()
+        if _tlt:
+            last, chg = _tlt
+            arrow = "▲" if chg >= 0 else "▼"
+            color = "#16c784" if chg >= 0 else "#ea3943"
+            chips.append(_badge("TLT", f'{last:.2f} <span style="color:{color};">{arrow} {chg:+.2f}%</span>', color))
     except Exception:
         pass
 
@@ -1084,6 +1108,8 @@ def render_market_watch():
     combined_tape = "".join(chips) + gm_extra
     if combined_tape.strip():
         st.markdown(combined_tape, unsafe_allow_html=True)
+        _src = "Dhan real-time (connected)" if is_dhan_configured() else "Yahoo (~15min delayed)"
+        st.caption(f"⚡ LTP source: {_src} | *GIFT NIFTY abhi NIFTY 50 spot proxy hai (NSE IX ka free feed available nahi) | Auto-update: Settings ⚙️ → Auto-Refresh → Live LTP")
 
 
 def apply_display_filters(df):
@@ -1100,6 +1126,68 @@ def apply_display_filters(df):
         elif "HQ Zone" in out.columns:
             out = out[out["HQ Zone"] == True]
     return out
+
+
+# ---------- LIVE LTP OVERLAY (display-only) ----------
+# Samasya: table ka "Current Price"/LTP scan-cached frame ki aakhri candle se aata
+# tha (TTL 6 ghante) -> LTP/Distance% ghanton purane dikhte the (user ki latency
+# shikayat ka doosra bada karan). Hal: render ke waqt sirf ye 2 display columns
+# live refresh hote hain (Dhan > Yahoo). ZONE SCAN KE INPUTS/RULES/LOGIC ME
+# KOI BADLAV NAHI - ye sirf display overlay hai.
+
+@st.cache_data(show_spinner=False, ttl=10)  # 10s cache - table render fast bhi, live bhi
+def cached_live_ltp(tickers_tuple, use_dhan):
+    """Displayed tickers ke live prices: Dhan (5s cache) > Yahoo (20s cache)."""
+    out = {}
+    syms = [str(t).replace(".NS", "") for t in tickers_tuple]
+    if use_dhan:
+        try:
+            out.update(cached_dhan_ltp_if_available(tuple(syms)) or {})
+        except Exception:
+            pass
+    try:
+        from fast_live_price import get_live_price_hybrid_ultra_fast
+        missing = [s for s in syms if s not in out]
+        if missing:
+            yh = get_live_price_hybrid_ultra_fast(tuple(f"{s}.NS" for s in missing))
+            for s in missing:
+                d = yh.get(f"{s}.NS")
+                if d and d.get("ltp"):
+                    out[s] = d
+    except Exception as e:
+        print(f"live LTP yahoo path error: {e}")
+    return out
+
+
+def overlay_live_prices(df):
+    """Table ke Current Price + Distance % ko live LTP se refresh karo.
+    Returns (df, info_caption). Scan data/filters untouched."""
+    try:
+        if df is None or df.empty or "Ticker" not in df.columns or "Current Price" not in df.columns:
+            return df, None
+        if not st.session_state.get("live_ltp_refresh", True):
+            return df, None
+        use_dhan = bool(is_dhan_configured())
+        ltp_map = cached_live_ltp(tuple(sorted(set(df["Ticker"].astype(str)))), use_dhan)
+        if not ltp_map:
+            return df, None
+        df = df.copy()
+        new_px = pd.to_numeric(df["Ticker"].map(lambda t: ltp_map.get(str(t), {}).get("ltp")), errors="coerce")
+        mask = new_px.notna()
+        if not mask.any():
+            return df, None
+        df.loc[mask, "Current Price"] = new_px[mask].round(2)
+        if "Entry (Proximal)" in df.columns:
+            entry = pd.to_numeric(df["Entry (Proximal)"], errors="coerce")
+            # Wahi formula jo scan me hai: dist_pct = (curr - prox) / curr * 100
+            dist_pct = (new_px - entry) / new_px * 100.0
+            df.loc[mask, "Distance %"] = dist_pct[mask].round(2)
+        src = "Dhan real-time" if use_dhan else "Yahoo"
+        info = f"⚡ LTP LIVE {datetime.now().strftime('%H:%M:%S')} • {src} • {int(mask.sum())} symbols updated"
+        return df, info
+    except Exception as e:
+        print(f"LTP overlay error: {e}")
+        return df, None
 
 
 def apply_proximity_filter(df, max_dist_pct=5.0, per_symbol_cap=2):
@@ -1389,7 +1477,15 @@ def render_table_main(df, file_label, all_frames=None):
         return pd.DataFrame()
 
     display_df = _add_hypothesis(df.copy())
+    display_df, ltp_info = overlay_live_prices(display_df)
+    _q = st.text_input("🔍 Symbol search", value="", key=f"search_{file_label}",
+                       placeholder="Jaise: RELI, HDFC, M&M...", help="Table ko turant filter karo (scan nahi hota)").strip().upper()
+    if _q:
+        display_df = display_df[display_df["Ticker"].astype(str).str.upper().str.contains(_q, na=False)]
+        st.caption(f"🔎 Search '{_q}': {len(display_df)} zones mile")
     _show_clean_table(display_df, "Symbol (TradingView Chart) - Touch to open")
+    if ltp_info:
+        st.caption(ltp_info)
 
     st.caption("**Legend:** Table nazdeek zone ke order me hai (sabse nazdeek pehle). Toote zone aur door ke zone Nearest-Zone Filter se hide hain (Settings ⚙️ me badal sakte ho).")
 
@@ -1435,7 +1531,15 @@ def render_table_validated(df, file_label, all_frames=None):
         return pd.DataFrame()
 
     display_df = _add_hypothesis(df.copy())
+    display_df, ltp_info = overlay_live_prices(display_df)
+    _vq = st.text_input("🔍 Symbol search", value="", key=f"vsearch_{file_label}",
+                        placeholder="Jaise: RELI, HDFC, M&M...", help="Table ko turant filter karo (scan nahi hota)").strip().upper()
+    if _vq:
+        display_df = display_df[display_df["Ticker"].astype(str).str.upper().str.contains(_vq, na=False)]
+        st.caption(f"🔎 Search '{_vq}': {len(display_df)} validated zones mile")
     _show_clean_table(display_df, "Symbol")
+    if ltp_info:
+        st.caption(ltp_info)
 
     st.caption("Legend: Table nazdeek zone ke order me hai. Toote/door ke zone Nearest-Zone Filter se hide hain.")
     csv = df.drop(columns=["Ticker"]).to_csv(index=False).encode("utf-8")
@@ -1593,7 +1697,7 @@ if "Main" in st.session_state.app_page:
             if is_gemini_configured() and GEMINI_MODULE_AVAILABLE:
                 try:
                     gkey = get_gemini_key()
-                    gemini_client = GeminiZoneAnalyzer(api_key=gkey, model="gemini-1.5-flash")
+                    gemini_client = GeminiZoneAnalyzer(api_key=gkey)
                     news_text = "\n".join([f"{r.get('desc')}" for _, r in news_df.head(3).iterrows()]) if not news_df.empty else "No news"
                     corp_text = "\n".join([f"{r.get('purpose')} ex {r.get('ex_date')}" for _, r in corp_df.head(2).iterrows()]) if not corp_df.empty else "No corp actions"
                     hypothesis = gemini_client.model.generate_content(f"Enhance this hypothesis in Hinglish, 2 lines, with verdict: {hypothesis} | News: {news_text} | Corp: {corp_text}").text
@@ -1795,7 +1899,7 @@ else:
             if is_gemini_configured() and GEMINI_MODULE_AVAILABLE:
                 try:
                     gkey = get_gemini_key()
-                    gemini_client = GeminiZoneAnalyzer(api_key=gkey, model="gemini-1.5-flash")
+                    gemini_client = GeminiZoneAnalyzer(api_key=gkey)
                     news_text = "\n".join([f"{r.get('desc')}" for _, r in news_df.head(3).iterrows()]) if not news_df.empty else "No news"
                     corp_text = "\n".join([f"{r.get('purpose')} ex {r.get('ex_date')}" for _, r in corp_df.head(2).iterrows()]) if not corp_df.empty else "No corp"
                     hypothesis = gemini_client.model.generate_content(f"Enhance hypothesis in Hinglish 2 lines: {hypothesis} | News: {news_text} | Corp: {corp_text}").text
@@ -1836,7 +1940,7 @@ else:
                     with st.spinner("Gemini analysis..."):
                         try:
                             gkey = get_gemini_key()
-                            gemini_client = GeminiZoneAnalyzer(api_key=gkey, model="gemini-1.5-flash")
+                            gemini_client = GeminiZoneAnalyzer(api_key=gkey)
                             daily_bucket = cc.last_closed_bucket("Daily")
                             up, down, flat, _ = cached_breadth_for_all(daily_bucket, tuple(all_tickers))
                             breadth = {"up": up, "down": down, "flat": flat, "total": up + down + flat}
@@ -2022,13 +2126,18 @@ if is_dhan_configured():
 # Ab (a) page ke sabse NICHE shift hai aur (b) collapsed expander ke andar hai,
 # isliye page saaf rehta hai -- kholne par hi news dikhti hai.
 st.markdown("---")
-with st.expander("🔴 LIVE: Important Market News / Events - Hindi + AI Summary + Global Impact (3 in 1 - Last 1 Hour Fresh)", expanded=False):
+with st.expander("🔴 LIVE: Important Market News / Events - Hindi + AI Summary + Global Impact (3 in 1)", expanded=False):
+    # Freshness window: pehle HARD 1-hour thi jisse news box zyadatar khaali rehta tha.
+    _nh_map = {"1 घंटा": 1, "3 घंटे": 3, "6 घंटे": 6, "12 घंटे": 12, "24 घंटे": 24}
+    _nh_choice = st.radio("🕒 News freshness window", list(_nh_map.keys()), index=0, horizontal=True, key="news_hours_radio")
+    news_hours = _nh_map[_nh_choice]
+    st.caption("✅ Filter: **सिर्फ NSE F&O stocks** की news + **macro/global events** (RBI, Fed, crude, rupee, FII/DII...) जो इन्हें affect करते हैं — बाकी noise छंटा हुआ")
     # ---------- LIVE news cards ----------
     try:
-        st.markdown("#### 🔴 Important Market News / Events - Current Notification (Last 1 Hour Fresh)")
+        st.markdown(f"#### 🔴 Important Market News / Events - Current Notification (Last {_nh_choice} Fresh)")
         try:
             from powerful_news_fetcher import get_verified_news_with_gemini_layers
-            verified_news_df = get_verified_news_with_gemini_layers()
+            verified_news_df = get_verified_news_with_gemini_layers(hours=news_hours)
             if verified_news_df is not None and not verified_news_df.empty:
                 for idx, row in verified_news_df.head(3).iterrows():
                     title = str(row.get("title", ""))[:120]
@@ -2066,7 +2175,7 @@ with st.expander("🔴 LIVE: Important Market News / Events - Hindi + AI Summary
             st.caption("Moneycontrol + ET Markets + Google News + NSE + BSE - sab sources se ek hi news ka combined summary")
             try:
                 from powerful_news_fetcher import get_verified_news_with_gemini_layers
-                verified_df = get_verified_news_with_gemini_layers()
+                verified_df = get_verified_news_with_gemini_layers(hours=news_hours)
                 if not verified_df.empty:
                     for _, row in verified_df.head(8).iterrows():
                         title = row.get("title", "")
@@ -2150,7 +2259,7 @@ with st.expander("🔴 LIVE: Important Market News / Events - Hindi + AI Summary
             st.caption("हर important news/event का किस stock/sector पर क्या असर होगा - Bullish/Bearish/Neutral + Reason Hindi में")
             try:
                 from powerful_news_fetcher import get_verified_news_with_gemini_layers
-                verified_df = get_verified_news_with_gemini_layers()
+                verified_df = get_verified_news_with_gemini_layers(hours=news_hours)
                 if not verified_df.empty:
                     for _, row in verified_df.head(6).iterrows():
                         symbol = row.get("symbol", "")
@@ -2197,6 +2306,20 @@ try:
             try:
                 from streamlit_autorefresh import st_autorefresh
                 st_autorefresh(interval=(next_sec + 5) * 1000, key=f"candle_close_{next_tf}")
+            except ImportError:
+                pass
+except Exception:
+    pass
+
+# ---------- Live LTP fast refresh (sirf market hours me - latency fix) ----------
+try:
+    if st.session_state.get("live_ltp_refresh", True):
+        _ms = cc.market_status()
+        if _ms.get("open"):
+            _iv = int(str(st.session_state.get("live_ltp_interval", "10s")).replace("s", ""))
+            try:
+                from streamlit_autorefresh import st_autorefresh as _st_ar
+                _st_ar(interval=_iv * 1000, key="live_ltp_refresh_timer")
             except ImportError:
                 pass
 except Exception:

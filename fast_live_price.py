@@ -1,380 +1,249 @@
 """
-powerful_news_fetcher.py - FRESH ONLY (Last 1 Hour) Stocks/Financial Market Trending News + Valid Links Only + No 2016
-User Requirement: Fresh only last 1 hour stocks OR financial market trending news + valid links only + no 2016
+fast_live_price.py - RESTORED: hybrid live-price engine (Dhan > Yahoo)
+
+BUG-FIX (latency ka asli karan): pehle is file me galti se
+powerful_news_fetcher.py ki poori copy aa gayi thi, jisse
+`get_live_price_hybrid_ultra_fast` / `get_gift_nifty_real` functions exist
+hi nahi karte the -> har import fail -> app HAMESHA slow fallback par
+chalti thi (Dhan API connected hone par bhi!). Ab asli module wapas hai.
+
+Priority (fastest source first):
+1. Dhan API (jab key configured hai) - real-time batch quotes, 5s cache
+2. Yahoo Finance batch quotes (curl_cffi session) - 20s cache
+3. Koi bhi source fail ho to quiet fallback - app kabhi nahi rukti
+
+IMPORTANT: zone scan ke inputs/parameters/rules/logic se iska koi lena-dena
+nahi hai - ye sirf DISPLAY (top tape + table ka LTP column) ke live prices
+refresh karta hai, scan engine untouched hai.
 """
 
-import requests
-import pandas as pd
-from datetime import datetime, timedelta
-import streamlit as st
-import xml.etree.ElementTree as ET
-from email.utils import parsedate_to_datetime
+import re
+from typing import Dict, List, Optional, Tuple
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+import streamlit as st
+
+# NSE indices ke Dhan security IDs (master CSV fail ho to bhi kaam chale)
+INDEX_DHAN_IDS = {
+    "NIFTY 50": "13",
+    "NIFTY": "13",
+    "NIFTY50": "13",
+    "BANK NIFTY": "25",
+    "BANKNIFTY": "25",
+    "FINNIFTY": "27",
+    "FIN NIFTY": "27",
+    "MIDCPNIFTY": "288",
+    "MIDCAP NIFTY": "288",
+    "NIFTY NEXT 50": "38",
+    "NIFTYNXT50": "38",
 }
 
-def extract_symbol_from_text(text: str) -> str:
-    try:
-        common = ["RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "SBIN", "BHARTIARTL", "ITC", "KOTAKBANK", "LT", "AXISBANK", "ASIANPAINT", "MARUTI", "BAJFINANCE", "WIPRO", "HCLTECH", "SUNPHARMA", "TITAN", "ULTRACEMCO", "NIFTY", "BANKNIFTY", "SENSEX", "FII", "DII", "RBI", "FED", "LT", "HINDZINC", "SBI", "FORCE MOTORS", "NIFTY", "BANK NIFTY", "GIFT NIFTY", "USDINR", "GOLD", "CRUDE", "STOCK", "MARKET", "SHARE", "BSE", "NSE"]
-        text_upper = text.upper()
-        for sym in common:
-            if sym in text_upper and len(sym) > 1:
-                return sym
-        return "MARKET"
-    except Exception:
-        return "MARKET"
+# Ye labels app me GIFT NIFTY ke proxy (NIFTY 50 spot) ke roop me dikhte hain
+_PROXY_LABELS = {"GIFT NIFTY"}
 
-def is_fresh_1hour(pub_date_str: str) -> bool:
-    """Fresh only last 1 hour - trending financial market news"""
+_SYM_RE = re.compile(r"^[A-Z0-9&\-_]{1,25}$")
+
+# Plain dikhte hain par Yahoo-only (US ETFs) - NSE_EQ me mat jao
+_YAHOO_PLAIN = {"TLT", "SPY", "QQQ", "DIA", "IWM", "GLD", "SLV", "USO", "UVXY", "VIX"}
+
+
+def _classify(symbols: Tuple[str, ...]):
+    """Symbols ko Dhan-INDEX / Dhan-EQ / Yahoo buckets me baant do."""
+    idx_ids: List[str] = []
+    eq_syms: List[str] = []
+    yahoo_syms: List[str] = []
+    plan = {}  # orig_sym -> ("idx"|"eq"|"yahoo", dhan_id_or_yahoo_key)
+    for sym in symbols:
+        s = str(sym).strip()
+        up = s.upper()
+        clean = up.replace(".NS", "")
+        if up in _PROXY_LABELS:
+            # GIFT NIFTY ka koi free real feed nahi -> NIFTY 50 spot proxy
+            plan[s] = ("idx", INDEX_DHAN_IDS["NIFTY 50"])
+            if INDEX_DHAN_IDS["NIFTY 50"] not in idx_ids:
+                idx_ids.append(INDEX_DHAN_IDS["NIFTY 50"])
+        elif clean in INDEX_DHAN_IDS:
+            plan[s] = ("idx", INDEX_DHAN_IDS[clean])
+            if INDEX_DHAN_IDS[clean] not in idx_ids:
+                idx_ids.append(INDEX_DHAN_IDS[clean])
+        elif any(m in s for m in ("^", "=X", "=F", ".NS", ".BO", "/", "!")):
+            plan[s] = ("yahoo", s)
+            yahoo_syms.append(s)
+        elif clean in _YAHOO_PLAIN:
+            plan[s] = ("yahoo", s)
+            yahoo_syms.append(s)
+        elif _SYM_RE.match(clean):
+            plan[s] = ("eq", clean)
+            eq_syms.append(clean)
+        else:
+            plan[s] = ("yahoo", s)
+            yahoo_syms.append(s)
+    return idx_ids, eq_syms, yahoo_syms, plan
+
+
+def _f(quote: dict, *keys, default=0.0) -> float:
+    """Dhan quote dict se pehla valid number nikalo."""
+    for k in keys:
+        try:
+            v = quote.get(k)
+            if v is not None and str(v).strip() != "":
+                return float(v)
+        except Exception:
+            continue
+    return default
+
+
+@st.cache_resource(show_spinner=False)
+def _dhan_client(client_id: str, access_token: str):
+    """Ek hi dhanhq client baar-baar reuse (naya connection har call par nahi)."""
     try:
-        if not pub_date_str:
-            return False  # No date = not fresh enough for 1 hour filter, skip
-        # Skip old years immediately
-        if any(y in pub_date_str for y in ["2016", "2017", "2018", "2019", "2020", "2021", "2022", "2023"]):
+        from dhanhq import dhanhq
+        return dhanhq(client_id, access_token)
+    except Exception as e:
+        print(f"Dhan client create error: {e}")
+        return None
+
+
+@st.cache_data(show_spinner=False, ttl=5)  # 5s - Dhan real-time fast path
+def _dhan_quote_batch(client_id: str, access_token: str, idx_ids: tuple, eq_syms: tuple) -> dict:
+    """Dhan batch quote.
+    Returns: index ID(str) -> quote  +  EQ symbol(str) -> quote
+    (EQ symbols yahan master CSV se security-ID me resolve hote hain.)"""
+    out: Dict[str, dict] = {}
+    if not (client_id and access_token):
+        return out
+    client = _dhan_client(client_id, access_token)
+    if client is None:
+        return out
+    securities: Dict[str, List[int]] = {}
+    key_for_sid: Dict[str, str] = {}  # security_id -> return key (idx id ya eq symbol)
+    if idx_ids:
+        securities["IDX_I"] = [int(x) for x in idx_ids]
+        for i in idx_ids:
+            key_for_sid[str(i)] = str(i)
+    if eq_syms:
+        try:
+            master = load_dhan_master_fast()
+        except Exception as e:
+            print(f"Dhan master load error: {e}")
+            master = {}
+        eq_id_list: List[int] = []
+        for s in eq_syms:
+            info = master.get(s) or master.get(s.split("-")[0])
+            if not info:
+                continue
+            sid = str(info.get("security_id", "")).strip()
+            if not sid or not sid.isdigit():
+                continue
+            eq_id_list.append(int(sid))
+            key_for_sid[sid] = s
+        if eq_id_list:
+            securities["NSE_EQ"] = eq_id_list
+    if not securities:
+        return out
+    try:
+        resp = client.quote_data(securities=securities)
+        data = resp.get("data") if isinstance(resp, dict) else None
+        if isinstance(data, dict):
+            for seg, sec_dict in data.items():
+                if not isinstance(sec_dict, dict):
+                    continue
+                for sec_id, quote in sec_dict.items():
+                    q = quote if isinstance(quote, dict) else {}
+                    ltp = _f(q, "last_price", "ltp", "average_price")
+                    key = key_for_sid.get(str(sec_id))
+                    if not ltp or not key:
+                        continue
+                    prev = _f(q, "prev_close", "prev_close_price", "previous_close", "close_price")
+                    if prev:
+                        chg = ltp - prev
+                        chg_pct = (chg / prev * 100.0) if prev else 0.0
+                    else:
+                        chg = _f(q, "net_change", "change", "day_change", "updown")
+                        chg_pct = _f(q, "percentage_change", "updown_percent")
+                    out[key] = {"ltp": ltp, "change": chg, "change_pct": chg_pct, "source": "Dhan"}
+    except Exception as e:
+        print(f"Dhan quote batch error: {e}")
+    return out
+
+
+@st.cache_data(show_spinner=False, ttl=20)  # 20s - Yahoo ko throttle na kare
+def _yahoo_quote_batch(yahoo_syms: tuple) -> dict:
+    """Yahoo batch: {yahoo_symbol: {"ltp","change","change_pct"}}"""
+    out: Dict[str, dict] = {}
+    if not yahoo_syms:
+        return out
+    try:
+        import data_fetch
+        quotes = data_fetch.fetch_market_watch_quotes(list(yahoo_syms))  # {t: (last, chg_pct)}
+        for t, (last, chg_pct) in (quotes or {}).items():
+            out[t] = {"ltp": float(last), "change": 0.0, "change_pct": float(chg_pct), "source": "Yahoo"}
+    except Exception as e:
+        print(f"Yahoo quote batch error: {e}")
+    return out
+
+
+def get_live_price_hybrid_ultra_fast(symbols, client_id: str = None, access_token: str = None) -> dict:
+    """
+    FAST hybrid live prices - Dhan (5s cache) > Yahoo (20s cache).
+
+    symbols: koi bhi mix - "RELIANCE", "M&M", "NIFTY 50", "GIFT NIFTY",
+             "^NSEI", "USDINR=X", "GC=F", "TLT", "TCS.NS" ...
+    Returns: {original_symbol: {"ltp","change","change_pct","source"}}
+    """
+    syms = tuple(symbols) if symbols else ()
+    if not syms:
+        return {}
+    idx_ids, eq_syms, yahoo_syms, plan = _classify(syms)
+
+    result: Dict[str, dict] = {}
+
+    # 1) Dhan fast path (sirf tab jab key diye gaye ho)
+    if client_id and access_token and (idx_ids or eq_syms):
+        try:
+            q = _dhan_quote_batch(client_id, access_token, tuple(idx_ids), tuple(eq_syms))
+            for orig, (kind, key) in plan.items():
+                if kind in ("idx", "eq") and key in q:
+                    result[orig] = q[key]
+        except Exception as e:
+            print(f"Dhan hybrid path error: {e}")
+
+    # 2) Yahoo fallback for whatever Dhan missed (ya jahan Dhan hai hi nahi)
+    need_yahoo = {}
+    for orig, (kind, key) in plan.items():
+        if orig in result:
+            continue
+        yk = key if kind == "yahoo" else (orig.replace(".NS", "") + ".NS" if kind == "eq" else orig)
+        need_yahoo[orig] = yk
+    if need_yahoo:
+        try:
+            yq = _yahoo_quote_batch(tuple(sorted(set(need_yahoo.values()))))
+            for orig, yk in need_yahoo.items():
+                if yk in yq:
+                    result[orig] = yq[yk]
+        except Exception as e:
+            print(f"Yahoo hybrid fallback error: {e}")
+
+    return result
+
+
+def get_gift_nifty_real() -> dict:
+    """
+    GIFT NIFTY (NSE IX, GIFT City) ka genuine continuous feed kisi FREE source
+    (Yahoo/Dhan) par available nahi hai - isliye {} return karte hain, taaki UI
+    galat price ko "Real" bolkar na dikhaye (proxy NIFTY 50 tape par already hai).
+    Jab future me koi bharosemand free endpoint mile, wahi yahan jud jayega.
+    """
+    return {}
+
+
+def is_dhan_fast_available() -> bool:
+    """Dhan fast path use ho sakta hai? (key configured + library installed)"""
+    try:
+        from secure_config import is_dhan_configured
+        try:
+            from dhanhq import dhanhq  # noqa: F401
+        except ImportError:
             return False
-        # Parse date
-        pub_dt = parsedate_to_datetime(pub_date_str)
-        pub_dt_naive = pub_dt.replace(tzinfo=None)
-        cutoff = datetime.now() - timedelta(hours=1)  # Last 1 hour only
-        return pub_dt_naive >= cutoff
-    except Exception:
-        return False  # If parse fails, not fresh enough for 1 hour
-
-def is_trending_financial_news(title: str, desc: str) -> bool:
-    """Only stocks OR financial market trending news"""
-    try:
-        text = (title + " " + desc).lower()
-        trending_keywords = [
-            "nifty", "sensex", "banknifty", "stock", "share", "market", "bse", "nse",
-            "result", "earnings", "profit", "loss", "dividend", "bonus", "split",
-            "fii", "dii", "rbi", "fed", "inflation", "gdp", "buyback", "merger",
-            "ipo", "listing", "intraday", "trading", "bull", "bear", "rally", "crash",
-            "gift nifty", "usd/inr", "gold", "crude", "tlt", "bond", "forex",
-            "reliance", "tcs", "infosys", "hdfc", "icici", "sbi", "lt", "axis"
-        ]
-        return any(k in text for k in trending_keywords)
+        return bool(is_dhan_configured())
     except Exception:
         return False
-
-def is_valid_link(link: str) -> bool:
-    """Valid links only - working https, no broken"""
-    try:
-        if not link or not isinstance(link, str):
-            return False
-        if not link.startswith("http"):
-            return False
-        if "TRADINGVIEW" in link.upper():
-            return False
-        if "HTTPS://WWW" in link.upper() and link.upper().count("HTTPS") > 1:
-            return False
-        if len(link) > 500 or len(link) < 20:
-            return False
-        # Must be from trusted financial sources
-        trusted_domains = ["moneycontrol.com", "economictimes.indiatimes.com", "news.google.com", "nseindia.com", "bseindia.com", "investing.com", "livemint.com", "financialexpress.com", "business-standard.com"]
-        if not any(domain in link.lower() for domain in trusted_domains):
-            # Allow if it's google news redirect (still valid)
-            if "news.google.com" not in link.lower() and "moneycontrol" not in link.lower() and "economictimes" not in link.lower():
-                # For NSE, allow
-                if "nseindia.com" not in link.lower() and "bseindia.com" not in link.lower():
-                    return False
-        return True
-    except Exception:
-        return False
-
-@st.cache_data(show_spinner=False, ttl=60)  # 1 min cache - ultra fresh 1 hour news
-def fetch_moneycontrol_trending_1hour(limit=15):
-    """Moneycontrol - Trending financial market news - Last 1 Hour Only + Valid Links"""
-    try:
-        urls = [
-            "https://www.moneycontrol.com/rss/MCtopnews.xml",
-            "https://www.moneycontrol.com/rss/latestnews.xml",
-            "https://www.moneycontrol.com/rss/marketreports.xml",
-        ]
-        all_news = []
-        for url in urls[:1]:  # Top 1 for speed
-            try:
-                resp = requests.get(url, headers=HEADERS, timeout=8)
-                if resp.status_code == 200:
-                    root = ET.fromstring(resp.content)
-                    for item in root.findall(".//item")[:30]:  # Check more to find 1 hour fresh
-                        title = item.find("title")
-                        link = item.find("link")
-                        desc = item.find("description")
-                        pub = item.find("pubDate")
-                        
-                        title_text = title.text if title is not None else ""
-                        link_text = link.text if link is not None else ""
-                        desc_text = desc.text if desc is not None else ""
-                        pub_text = pub.text if pub is not None else ""
-                        
-                        # Fresh only last 1 hour
-                        if not is_fresh_1hour(pub_text):
-                            continue
-                        # Trending financial only
-                        if not is_trending_financial_news(title_text, desc_text):
-                            continue
-                        # Valid link only
-                        if not is_valid_link(link_text):
-                            continue
-                        if not title_text or len(title_text) < 15:
-                            continue
-                        
-                        all_news.append({
-                            "source": "Moneycontrol",
-                            "title": title_text,
-                            "link": link_text,
-                            "desc": desc_text[:300],
-                            "date": pub_text,
-                            "symbol": extract_symbol_from_text(title_text + " " + desc_text),
-                            "fresh": "1H",
-                        })
-                        if len(all_news) >= limit:
-                            break
-            except Exception as e:
-                print(f"Moneycontrol 1H {url} error: {e}")
-                continue
-        return pd.DataFrame(all_news)
-    except Exception as e:
-        print(f"Moneycontrol 1H fetch error: {e}")
-        return pd.DataFrame()
-
-@st.cache_data(show_spinner=False, ttl=60)
-def fetch_et_trending_1hour(limit=15):
-    """Economic Times - Trending - Last 1 Hour Only"""
-    try:
-        urls = ["https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"]
-        all_news = []
-        for url in urls:
-            try:
-                resp = requests.get(url, headers=HEADERS, timeout=8)
-                if resp.status_code == 200:
-                    root = ET.fromstring(resp.content)
-                    for item in root.findall(".//item")[:30]:
-                        title = item.find("title")
-                        link = item.find("link")
-                        desc = item.find("description")
-                        pub = item.find("pubDate")
-                        
-                        title_text = title.text if title is not None else ""
-                        link_text = link.text if link is not None else ""
-                        desc_text = desc.text if desc is not None else ""
-                        pub_text = pub.text if pub is not None else ""
-                        
-                        if not is_fresh_1hour(pub_text):
-                            continue
-                        if not is_trending_financial_news(title_text, desc_text):
-                            continue
-                        if not is_valid_link(link_text):
-                            continue
-                        if not title_text or len(title_text) < 15:
-                            continue
-                        
-                        all_news.append({
-                            "source": "Economic Times",
-                            "title": title_text,
-                            "link": link_text,
-                            "desc": desc_text[:300],
-                            "date": pub_text,
-                            "symbol": extract_symbol_from_text(title_text),
-                            "fresh": "1H",
-                        })
-                        if len(all_news) >= limit:
-                            break
-            except Exception as e:
-                print(f"ET 1H RSS error: {e}")
-                continue
-        return pd.DataFrame(all_news)
-    except Exception as e:
-        print(f"ET 1H fetch error: {e}")
-        return pd.DataFrame()
-
-@st.cache_data(show_spinner=False, ttl=60)
-def fetch_google_news_trending_1hour(limit=15):
-    """Google News - Trending Stocks/Financial - Last 1 Hour Only - Ultra Fresh"""
-    try:
-        # Search for trending financial news in last 1 hour
-        url = "https://news.google.com/rss/search?q=stock+market+trending+today+NSE+BSE+live&hl=en-IN&gl=IN&ceid=IN:en"
-        resp = requests.get(url, headers=HEADERS, timeout=8)
-        all_news = []
-        if resp.status_code == 200:
-            root = ET.fromstring(resp.content)
-            for item in root.findall(".//item")[:30]:
-                title = item.find("title")
-                link = item.find("link")
-                desc = item.find("description")
-                pub = item.find("pubDate")
-                
-                title_text = title.text if title is not None else ""
-                link_text = link.text if link is not None else ""
-                desc_text = desc.text if desc is not None else ""
-                pub_text = pub.text if pub is not None else ""
-                
-                if not is_fresh_1hour(pub_text):
-                    continue
-                if not is_trending_financial_news(title_text, desc_text):
-                    continue
-                if not is_valid_link(link_text):
-                    continue
-                if not title_text or len(title_text) < 15:
-                    continue
-                
-                all_news.append({
-                    "source": "Google News",
-                    "title": title_text,
-                    "link": link_text,
-                    "desc": desc_text[:300],
-                    "date": pub_text,
-                    "symbol": extract_symbol_from_text(title_text),
-                    "fresh": "1H",
-                })
-                if len(all_news) >= limit:
-                    break
-        return pd.DataFrame(all_news)
-    except Exception as e:
-        print(f"Google News 1H error: {e}")
-        return pd.DataFrame()
-
-@st.cache_data(show_spinner=False, ttl=60)
-def fetch_nse_trending_1hour(limit=10):
-    """NSE Announcements - Trending - Last 1 Hour - SAFE (no external import, app never white screen)"""
-    try:
-        # Try to import NSE module, but if fails, return empty (app still works)
-        try:
-            from news_corporate_events import get_nse_announcements
-            nse_df = get_nse_announcements(days=1)
-            if not nse_df.empty:
-                formatted = []
-                for _, row in nse_df.head(30).iterrows():
-                    symbol = str(row.get("symbol", ""))
-                    desc = str(row.get("desc", ""))
-                    date = str(row.get("date", ""))
-                    clean_symbol = symbol.replace(".NS", "").replace("https://", "").replace("http://", "").split("/")[0].split("?")[0].strip()
-                    if not clean_symbol or len(clean_symbol) > 20 or "TRADINGVIEW" in clean_symbol.upper():
-                        continue
-                    if not is_trending_financial_news(clean_symbol, desc):
-                        continue
-                    link = f"https://www.nseindia.com/get-quotes/equity?symbol={clean_symbol}"
-                    if not is_valid_link(link):
-                        continue
-                    formatted.append({
-                        "source": "NSE",
-                        "title": f"{clean_symbol} - {desc[:80]}",
-                        "link": link,
-                        "desc": desc,
-                        "date": date,
-                        "symbol": clean_symbol,
-                        "fresh": "1H",
-                    })
-                    if len(formatted) >= limit:
-                        break
-                return pd.DataFrame(formatted)
-        except Exception as e:
-            print(f"NSE 1H trending inner error (safe): {e}")
-        return pd.DataFrame()
-    except Exception as e:
-        print(f"NSE 1H trending outer safe error: {e}")
-        return pd.DataFrame()
-
-@st.cache_data(show_spinner=False, ttl=60)  # 1 min cache - ultra fresh 1 hour
-def get_all_powerful_free_news(limit_per_source=10):
-    """Combine all - Fresh Only Last 1 Hour, Trending Financial, Valid Links Only, No 2016"""
-    try:
-        dfs = []
-        
-        # 1. NSE - fresh trending
-        nse_df = fetch_nse_trending_1hour(limit_per_source)
-        if not nse_df.empty:
-            dfs.append(nse_df)
-        
-        # 2. Moneycontrol - 1 hour trending
-        mc_df = fetch_moneycontrol_trending_1hour(limit_per_source)
-        if not mc_df.empty:
-            dfs.append(mc_df)
-        
-        # 3. ET Markets - 1 hour trending
-        et_df = fetch_et_trending_1hour(limit_per_source)
-        if not et_df.empty:
-            dfs.append(et_df)
-        
-        # 4. Google News - 1 hour ultra fresh trending
-        gn_df = fetch_google_news_trending_1hour(limit_per_source)
-        if not gn_df.empty:
-            dfs.append(gn_df)
-        
-        if dfs:
-            combined = pd.concat(dfs, ignore_index=True)
-            # Remove duplicates
-            combined = combined.drop_duplicates(subset=["title"], keep="first")
-            # Valid links only
-            combined = combined[combined["link"].apply(is_valid_link)]
-            # Trending financial only (double check)
-            combined = combined[combined.apply(lambda row: is_trending_financial_news(row["title"], row["desc"]), axis=1)]
-            # Sort by fresh (newest first)
-            return combined.head(30)
-        return pd.DataFrame()
-    except Exception as e:
-        print(f"All powerful 1H trending error: {e}")
-        return pd.DataFrame()
-
-@st.cache_data(show_spinner=False, ttl=60)
-def get_verified_news_with_gemini_layers():
-    """Multi-layer verification - Fresh Only Last 1 Hour, Trending, Valid Links, No 2016"""
-    try:
-        all_news_df = get_all_powerful_free_news()
-        if all_news_df.empty:
-            return pd.DataFrame()
-        
-        # Powerful trending keywords
-        powerful_keywords = ["result", "dividend", "bonus", "split", "buyback", "merger", "rbi", "fed", "inflation", "gdp", "profit", "loss", "board meeting", "earnings", "nifty", "banknifty", "sensex", "fii", "dii", "ipo", "rally", "crash", "trending", "live", "today", "breaking"]
-        all_news_df["is_powerful"] = all_news_df["title"].str.lower().apply(lambda x: any(k in str(x).lower() for k in powerful_keywords))
-        
-        # Cross-verify
-        symbol_counts = all_news_df["symbol"].value_counts()
-        all_news_df["cross_verified"] = all_news_df["symbol"].apply(lambda s: symbol_counts.get(s, 0) >= 2 if s else False)
-        all_news_df["confidence"] = all_news_df.apply(lambda row: "High" if row["cross_verified"] and row["is_powerful"] else "Medium" if row["is_powerful"] else "Low", axis=1)
-        
-        # Gemini verification
-        try:
-            from secure_config import is_gemini_configured
-            if is_gemini_configured():
-                from gemini_analyzer import get_gemini_hypothesis_for_news
-                verified = []
-                for _, row in all_news_df.head(8).iterrows():
-                    try:
-                        hypo = get_gemini_hypothesis_for_news(row.get("symbol",""), row.get("title","") + " " + row.get("desc",""))
-                        verified.append({
-                            **row.to_dict(),
-                            "gemini_bias": hypo.get("bias", "Neutral") if isinstance(hypo, dict) else "Neutral",
-                            "gemini_reason_hindi": hypo.get("reason_hindi", "") if isinstance(hypo, dict) else "",
-                            "gemini_impact": hypo.get("impact", "Medium") if isinstance(hypo, dict) else "Medium",
-                        })
-                    except Exception:
-                        verified.append({**row.to_dict(), "gemini_bias": "Neutral", "gemini_reason_hindi": "", "gemini_impact": "Medium"})
-                return pd.DataFrame(verified)
-        except Exception as e:
-            print(f"Gemini 1H layer error: {e}")
-        
-        return all_news_df
-    except Exception as e:
-        print(f"Verified 1H trending error: {e}")
-        return pd.DataFrame()
-
-def get_news_for_symbol_powerful(symbol: str, limit=5):
-    """Get fresh 1 hour trending verified news for symbol - valid links only"""
-    try:
-        all_news = get_all_powerful_free_news()
-        if all_news.empty:
-            return pd.DataFrame()
-        symbol_upper = symbol.replace(".NS","").upper().split("?")[0].split("/")[0].strip()
-        if not symbol_upper or "TRADINGVIEW" in symbol_upper or len(symbol_upper) > 20:
-            return pd.DataFrame()
-        filtered = all_news[
-            all_news["symbol"].str.upper().str.contains(symbol_upper, na=False) | 
-            all_news["title"].str.upper().str.contains(symbol_upper, na=False)
-        ]
-        filtered = filtered[filtered["link"].apply(is_valid_link)]
-        return filtered.head(limit)
-    except Exception:
-        return pd.DataFrame()
