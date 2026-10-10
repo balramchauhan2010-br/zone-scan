@@ -11,3 +11,6 @@ venv/
 # Cache
 .cache/
 *.log
+
+# Sandbox-only local streamlit server config (deployment me zaroori nahi)
+.streamlit/config.toml
