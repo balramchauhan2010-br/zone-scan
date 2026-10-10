@@ -10,7 +10,9 @@ chalti thi (Dhan API connected hone par bhi!). Ab asli module wapas hai.
 Priority (fastest source first):
 1. Dhan API (jab key configured hai) - real-time batch quotes, 5s cache
 2. Yahoo Finance batch quotes (curl_cffi session) - 20s cache
-3. Koi bhi source fail ho to quiet fallback - app kabhi nahi rukti
+3. NSE MCP live quotes (keyless, persistent session, 10s cache) - sirf NSE
+   stocks jo 1 aur 2 se nahi mile; circuit breaker ke saath
+4. Koi bhi source fail ho to quiet fallback - app kabhi nahi rukti
 
 IMPORTANT: zone scan ke inputs/parameters/rules/logic se iska koi lena-dena
 nahi hai - ye sirf DISPLAY (top tape + table ka LTP column) ke live prices
@@ -122,6 +124,9 @@ def _dhan_quote_batch(client_id: str, access_token: str, idx_ids: tuple, eq_syms
             key_for_sid[str(i)] = str(i)
     if eq_syms:
         try:
+            # BUG-FIX: ye function is file me import hi nahi tha -> NameError -> master={} ->
+            # Dhan se NSE stocks kabhi resolve nahi hote the (sab Yahoo par jaata tha).
+            from dhan_api_helper import load_dhan_master_fast
             master = load_dhan_master_fast()
         except Exception as e:
             print(f"Dhan master load error: {e}")
@@ -222,6 +227,27 @@ def get_live_price_hybrid_ultra_fast(symbols, client_id: str = None, access_toke
                     result[orig] = yq[yk]
         except Exception as e:
             print(f"Yahoo hybrid fallback error: {e}")
+
+    # 3) NSE MCP (official, keyless) - Dhan + Yahoo dono jo miss karein sirf NSE stocks ke
+    #    liye aakhri fallback. Yahoo ke baad isliye: NSE live data 1-3 min delay ka hai,
+    #    to jab Dhan/Yahoo chal rahe hon to latency kabhi nahi badhti.
+    nse_need: Dict[str, str] = {}
+    for orig, (kind, key) in plan.items():
+        if orig in result:
+            continue
+        if kind == "eq":
+            nse_need[orig] = key
+        elif kind == "yahoo" and orig.upper().endswith(".NS"):
+            nse_need[orig] = orig[:-3].upper()
+    if nse_need:
+        try:
+            import nse_mcp_client as nmc
+            nq = nmc.get_client().live_quotes(list(nse_need.values()))
+            for orig, sym in nse_need.items():
+                if sym in nq:
+                    result[orig] = nq[sym]
+        except Exception as e:
+            print(f"NSE MCP fallback error: {e}")
 
     return result
 

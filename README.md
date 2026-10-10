@@ -141,6 +141,9 @@ market_pulse.py          - NEW: AI Trader Pulse (delivery %, F&O breadth %, opti
                            FII/DII, volume, global+news AI summary, Top 10, pre/post-market)
 indicators_hypothesis.py - NEW: RSI/EMA/Supertrend/MACD + rule-based Hinglish hypothesis
                            (app.py already imported this optionally — file was missing)
+nse_mcp_client.py          - NEW: official NSE MCP client (persistent session, parallel calls,
+                           TTL cache, circuit breaker) - keyless live-LTP fallback + market data
+test_nse_mcp_client.py  - NEW: 14 tests (local mock NSE MCP server, no internet needed)
 app.py                   - the Streamlit UI
 requirements.txt
 ```
@@ -175,6 +178,77 @@ internet connection and commit the updated file:
 ```bash
 python fno_universe.py --refresh
 ```
+
+## NSE MCP integration (keyless, official NSE data server)
+
+NSE publishes two public MCP servers (Streamable HTTP, no login, no API key):
+
+| Server | Endpoint | Use in this app |
+| --- | --- | --- |
+| `cm-market` (live) | `https://mcp.nseindia.in/cmmkt/mcp` | Live quote fallback for LTP tape / table (`cm_get_stock_quote`), live gainers/losers (`nse_get_market_movers`), data freshness (`cm_get_data_status`) |
+| `nse-bhavcopy` (EOD) | `https://mcp.nseindia.in/bhavcopy/cm/mcp` | 52-week high/low, market breadth, corporate actions, top-by-volume |
+
+### Latency: what is fast and what is not
+
+- **Live LTP priority is unchanged for speed:** Dhan (real-time, 5s cache) > Yahoo
+  (20s cache) > **NSE MCP** (new, last fallback, only for NSE stocks that Dhan and
+  Yahoo both missed). NSE's own live feed is 1-3 min behind and refreshes about every
+  5 min, so putting it first would make the tape *slower*.
+- **NSE MCP has no intraday candles** (no 15m/1H/etc. bars for any tool). The zone
+  scanner's candles therefore still come from Dhan intraday / Yahoo. Zone rules
+  (`zone_core.py`, `scanner.py`) are not touched.
+- **Latency controls in `nse_mcp_client.py`:**
+  1. one persistent MCP session reused for the whole app (no handshake per call),
+  2. batch quotes run in parallel (max 8 in flight),
+  3. TTL cache: quote 10s, movers 60s, breadth/top-volume 15 min, corporate actions 30 min, 52W 1h,
+  4. circuit breaker: if NSE is unreachable, it is skipped for 60s, so the UI never hangs
+     (connect timeout 5s, call timeout 6s),
+  5. tool arguments are filtered against each tool's JSON schema, so a small NSE
+     signature change does not crash the app.
+
+### Configuration
+
+| Env var | Default | Effect |
+| --- | --- | --- |
+| `NSE_MCP_ENABLED` | `1` | `0` disables NSE MCP completely |
+| `NSE_MCP_LIVE_URL` | `https://mcp.nseindia.in/cmmkt/mcp` | override live endpoint |
+| `NSE_MCP_BHAVCOPY_URL` | `https://mcp.nseindia.in/bhavcopy/cm/mcp` | override EOD endpoint |
+
+`mcp>=1.20,<2` is in `requirements.txt` (the `mcp` 2.x SDK has a different API).
+
+### Verify the field names on your network (recommended once)
+
+NSE endpoints are not reachable from every network (the build sandbox used for
+this change could not reach them). Run this once from a normal internet connection:
+
+```bash
+python nse_mcp_client.py --probe RELIANCE
+```
+
+It prints the tool list, the schema of each tool, and the raw JSON of
+`cm_get_stock_quote` and `get_52_week_high_low`. The quote parser looks for keys like
+`lastPrice`/`last_price`/`ltp` and `pChange`/`change_pct` anywhere in the JSON. If your
+output uses other names, add them to `_LTP_KEYS` / `_CHG_PCT_KEYS` in `nse_mcp_client.py`.
+
+Tests (run without internet, against a local mock MCP server):
+
+```bash
+pytest -q test_nse_mcp_client.py
+```
+
+- **Dhan equity fix (latency):** `fast_live_price.py` never imported
+  `load_dhan_master_fast`, so the Dhan batch path silently resolved zero NSE stocks and
+  every stock fell through to Yahoo. The import is fixed and covered by a regression test.
+
+### Terms and limits (please read)
+
+- NSE states that MCP data is for **informational and educational use**, not for
+  real-time trading, commercial deployment, or training AI models. Treat NSE MCP
+  values as a fallback/context source. Do not rely on them as the only input for
+  live trade decisions.
+- Live NSE data is delayed by NSE's own crawl (about 1-3 minutes, refresh about 5 minutes).
+- Daily history from `get_stock_history` is not split/bonus adjusted; use
+  `get_corporate_actions` before computing long-range returns.
 
 ## Data limitations (please read)
 

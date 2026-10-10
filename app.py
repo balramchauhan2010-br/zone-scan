@@ -1199,6 +1199,9 @@ def overlay_live_prices(df):
             dist_pct = (new_px - entry) / new_px * 100.0
             df.loc[mask, "Distance %"] = dist_pct[mask].round(2)
         src = "Dhan real-time" if use_dhan else "Yahoo"
+        nse_n = sum(1 for d in ltp_map.values() if isinstance(d, dict) and d.get("source") == "NSE MCP")
+        if nse_n:
+            src += f" + NSE MCP fallback ({nse_n})"
         info = f"⚡ LTP LIVE {datetime.now().strftime('%H:%M:%S')} • {src} • {int(mask.sum())} symbols updated"
         return df, info
     except Exception as e:
