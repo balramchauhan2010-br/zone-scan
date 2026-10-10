@@ -1098,7 +1098,8 @@ def _mcx_front_ids_cached() -> dict:
 
 
 @st.cache_data(show_spinner=False, ttl=5)  # Dhan live quote - tape ki tarah 5s cache
-def _mcx_quotes_cached(client_id: str, access_token: str, pairs: tuple) -> dict:
+def _dhan_segment_quotes_cached(client_id: str, access_token: str, segment: str, pairs: tuple) -> dict:
+    """segment = "MCX_COMM" ya "NSE_CURRENCY". pairs = ((name, security_id), ...)"""
     """pairs = ((commodity, security_id), ...) -> {commodity: {ltp, change_pct, source}}"""
     out = {}
     if not (client_id and access_token and pairs):
@@ -1109,9 +1110,9 @@ def _mcx_quotes_cached(client_id: str, access_token: str, pairs: tuple) -> dict:
         client = _dhan_client(client_id, access_token)
         if client is None:
             return out
-        resp = client.quote_data(securities={"MCX_COMM": [int(sid) for _, sid in pairs]})
+        resp = client.quote_data(securities={segment: [int(sid) for _, sid in pairs]})
         data = resp.get("data") if isinstance(resp, dict) else None
-        sec = (data or {}).get("MCX_COMM") or {}
+        sec = (data or {}).get(segment) or {}
         for name, sid in pairs:
             parsed = gl.parse_mcx_quote(sec.get(str(sid)))
             if parsed:
@@ -1137,16 +1138,80 @@ def _mcx_quotes_for_ui() -> dict:
         return {}
     if not ids:
         return {}
-    return _mcx_quotes_cached(cid, tok, tuple(sorted(ids.items())))
+    return _dhan_segment_quotes_cached(cid, tok, "MCX_COMM", tuple(sorted(ids.items())))
+
+
+@st.cache_data(show_spinner=False, ttl=3600)  # NSE currency futures front-month (shared master, fail -> cache nahi)
+def _inr_front_ids_cached() -> dict:
+    import global_live as gl
+    from dhan_api_helper import download_dhan_master_df
+    names = sorted({it["nse_cur"] for it in gi.TOP_GLOBAL if it.get("nse_cur")})
+    return gl.pick_inr_currency_front_ids(download_dhan_master_df(), names)
+
+
+def _inr_quotes_for_ui() -> dict:
+    """INR pairs: Dhan NSE_CURRENCY front-month futures (Dhan configured ho tabhi). {NAME: {ltp, change_pct}}"""
+    try:
+        from secure_config import is_dhan_configured, get_dhan_creds
+        if not is_dhan_configured():
+            return {}
+        cid, tok = get_dhan_creds()
+        ids = _inr_front_ids_cached()
+    except Exception as e:
+        print(f"INR futures resolve error: {e}")
+        return {}
+    if not ids:
+        return {}
+    return _dhan_segment_quotes_cached(cid, tok, "NSE_CURRENCY", tuple(sorted(ids.items())))
+
+
+def _twelve_api_key() -> str:
+    """Twelve Data key: env TWELVEDATA_API_KEY ya secrets [twelvedata] api_key. Nahi to ""."""
+    k = os.getenv("TWELVEDATA_API_KEY", "")
+    if not k:
+        try:
+            k = str(st.secrets["twelvedata"]["api_key"])
+        except Exception:
+            k = ""
+    return k
+
+
+@st.cache_data(show_spinner=False, ttl=120)  # free tier: 8 credits/min -> 2 min cache
+def _twelve_quotes_cached(api_key: str, pairs: tuple) -> dict:
+    """pairs = ((yahoo, twelve), ...) -> {yahoo: (close, pct)}; error -> {}"""
+    import requests
+    import global_live as gl
+    try:
+        syms = ",".join(tw for _, tw in pairs)
+        r = requests.get("https://api.twelvedata.com/quote", params={"symbol": syms, "apikey": api_key}, timeout=8)
+        return gl.parse_twelve_quotes(r.json(), {y: t for y, t in pairs})
+    except Exception as e:
+        print(f"Twelve Data quote error: {e}")
+        return {}
 
 
 def render_top_global_html() -> str:
     """Top Global row: spot (Yahoo/global) chip + MCX futures ka alag chip. Sab TradingView se linked."""
-    quotes = cached_market_watch() or {}
+    quotes = dict(cached_market_watch() or {})
+    # Fallback 1: Yahoo spot se jo missing, woh Twelve Data se (sirf key configured ho to)
+    key = _twelve_api_key()
+    if key:
+        import global_live as gl
+        miss = {it["yahoo"]: it for it in gi.TOP_GLOBAL if it["yahoo"] not in quotes}
+        pairs = tuple(sorted(gl.twelve_request_symbols(miss.keys()).items()))
+        if pairs:
+            quotes.update(_twelve_quotes_cached(key, pairs) or {})
     mcx = _mcx_quotes_for_ui() or {}
+    inr = _inr_quotes_for_ui() or {}
     chips = []
     for it in gi.TOP_GLOBAL:
-        chips.append(_quote_chip(it["label"], it["tv"], quotes.get(it["yahoo"])))
+        q = quotes.get(it["yahoo"])
+        note = ""
+        if it.get("nse_cur") and inr.get(it["nse_cur"]):
+            m = inr[it["nse_cur"]]
+            q = (m["ltp"], m["change_pct"])
+            note = "Dhan NSE currency futures (front-month) - spot se thoda alag ho sakta hai"
+        chips.append(_quote_chip(it["label"], it["tv"], q, note))
         if it.get("mcx"):
             m = mcx.get(it["mcx"])
             chips.append(_quote_chip(f"MCX {it['mcx']}", it["tv_mcx"], (m["ltp"], m["change_pct"]) if m else None))

@@ -23,17 +23,17 @@ _REQUIRED_COLS = ("SEM_EXM_EXCH_ID", "SEM_INSTRUMENT_NAME", "SM_SYMBOL_NAME",
                   "SEM_SMST_SECURITY_ID", "SEM_EXPIRY_DATE")
 
 
-def pick_mcx_front_ids(master: pd.DataFrame, names: Iterable[str],
-                       today: Optional[pd.Timestamp] = None) -> Dict[str, str]:
-    """{commodity_name: security_id} - har name ke liye sabse nazdeek non-expired FUTCOM.
+def pick_front_ids(master: pd.DataFrame, names: Iterable[str], exch: str, instrument: str,
+                   today: Optional[pd.Timestamp] = None) -> Dict[str, str]:
+    """{SM_SYMBOL_NAME: security_id} - har name ke liye sabse nazdeek non-expired contract.
 
-    names: e.g. ("COPPER", "ALUMINIUM", "ZINC", "NATURALGAS", "GOLD", "SILVER")
+    exch: "MCX" (commodity) ya "NSE" (currency futures); instrument: "FUTCOM" / "FUTCUR".
     """
     if master is None or master.empty or not all(c in master.columns for c in _REQUIRED_COLS):
         return {}
     want = {str(n).strip().upper() for n in names}
-    df = master[(master["SEM_EXM_EXCH_ID"].astype(str).str.upper() == "MCX")
-                & (master["SEM_INSTRUMENT_NAME"].astype(str).str.upper() == "FUTCOM")].copy()
+    df = master[(master["SEM_EXM_EXCH_ID"].astype(str).str.upper() == exch.upper())
+                & (master["SEM_INSTRUMENT_NAME"].astype(str).str.upper() == instrument.upper())].copy()
     df["_sym"] = df["SM_SYMBOL_NAME"].astype(str).str.strip().str.upper()
     df = df[df["_sym"].isin(want)]
     if df.empty:
@@ -49,6 +49,62 @@ def pick_mcx_front_ids(master: pd.DataFrame, names: Iterable[str],
             sid = sid[:-2]
         if sid.isdigit():
             out[sym] = sid
+    return out
+
+
+def pick_mcx_front_ids(master: pd.DataFrame, names: Iterable[str],
+                       today: Optional[pd.Timestamp] = None) -> Dict[str, str]:
+    """MCX commodity futures (FUTCOM) ke front-month security IDs."""
+    return pick_front_ids(master, names, "MCX", "FUTCOM", today)
+
+
+def pick_inr_currency_front_ids(master: pd.DataFrame, names: Iterable[str],
+                                today: Optional[pd.Timestamp] = None) -> Dict[str, str]:
+    """NSE currency futures (FUTCUR, segment NSE_CURRENCY) ke front-month IDs - e.g. USDINR, JPYINR, GBPINR."""
+    return pick_front_ids(master, names, "NSE", "FUTCUR", today)
+
+
+# ---------------------------------------------------------------- Twelve Data (optional, free key)
+
+# Yahoo symbol -> Twelve Data symbol (sirf woh jo confirm hain: forex, crypto, XAU/XAG)
+TWELVE_SYMBOL = {
+    "GC=F": "XAU/USD", "SI=F": "XAG/USD",
+    "EURUSD=X": "EUR/USD", "GBPUSD=X": "GBP/USD", "JPY=X": "USD/JPY",
+    "USDINR=X": "USD/INR", "GBPINR=X": "GBP/INR", "JPYINR=X": "JPY/INR",
+    "BTC-USD": "BTC/USD",
+}
+
+
+def twelve_request_symbols(yahoo_syms: Iterable[str]) -> Dict[str, str]:
+    """{yahoo: twelve} - sirf mapped symbols."""
+    return {y: TWELVE_SYMBOL[y] for y in yahoo_syms if y in TWELVE_SYMBOL}
+
+
+def parse_twelve_quotes(payload, yahoo_by_twelve: Dict[str, str]) -> Dict[str, tuple]:
+    """Twelve Data /quote response -> {yahoo: (close, percent_change)}.
+    Batch (comma list) me response {SYMBOL: {...}} hota hai; single symbol me seedha object.
+    Error payload (status=error / code) -> {}."""
+    if not isinstance(payload, dict) or payload.get("status") == "error":
+        return {}
+    out: Dict[str, tuple] = {}
+
+    def _one(q, yahoo):
+        try:
+            last = float(q["close"])
+            chg = float(q.get("percent_change") or 0.0)
+        except (KeyError, TypeError, ValueError):
+            return
+        out[yahoo] = (last, chg)
+
+    if len(yahoo_by_twelve) == 1:
+        (yahoo, _tw), = yahoo_by_twelve.items()
+        if isinstance(payload.get("close"), (str, float, int)):
+            _one(payload, yahoo)
+            return out
+    for yahoo, tw in yahoo_by_twelve.items():
+        q = payload.get(tw)
+        if isinstance(q, dict) and q.get("status") != "error":
+            _one(q, yahoo)
     return out
 
 
