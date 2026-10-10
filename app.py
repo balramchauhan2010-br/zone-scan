@@ -582,7 +582,7 @@ def cached_market_watch():
 
         try:
             clean_symbols = []
-            for item in gi.MARKET_WATCH:
+            for item in gi.all_watch_items():
                 label = item.get("label", "")
                 yahoo = item.get("yahoo", "")
                 if label in ["NIFTY 50", "BANK NIFTY", "GIFT NIFTY"]:
@@ -593,7 +593,7 @@ def cached_market_watch():
             fast_prices = get_live_price_hybrid_ultra_fast(tuple(clean_symbols), client_id, access_token)
 
             result = {}
-            for item in gi.MARKET_WATCH:
+            for item in gi.all_watch_items():
                 yahoo = item["yahoo"]
                 label = item["label"]
                 price_data = None
@@ -611,7 +611,7 @@ def cached_market_watch():
 
             if result:
                 try:
-                    yahoo_fallback = data_fetch.fetch_market_watch_quotes([item["yahoo"] for item in gi.MARKET_WATCH])
+                    yahoo_fallback = data_fetch.fetch_market_watch_quotes([item["yahoo"] for item in gi.all_watch_items()])
                     merged = {**yahoo_fallback, **result}
                     return merged
                 except Exception:
@@ -623,7 +623,7 @@ def cached_market_watch():
 
     # Final fallback: Yahoo
     try:
-        yahoo_quotes = data_fetch.fetch_market_watch_quotes([item["yahoo"] for item in gi.MARKET_WATCH])
+        yahoo_quotes = data_fetch.fetch_market_watch_quotes([item["yahoo"] for item in gi.all_watch_items()])
         return yahoo_quotes
     except Exception as e:
         print(f"Market watch Yahoo fallback error: {e}")
@@ -1065,6 +1065,93 @@ def _tlt_quote_cached():
     return None
 
 
+def _tv_url(tv_symbol: str) -> str:
+    """TradingView chart link (exchange:symbol). '!' waise hi rehta hai (continuous futures)."""
+    from urllib.parse import quote
+    return f"https://www.tradingview.com/chart/?symbol={quote(str(tv_symbol), safe='!')}"
+
+
+def _quote_chip(label, tv_symbol, q, note=""):
+    """Chip = TradingView chart link + live LTP/%chg. q = (last, chg_pct) ya None."""
+    url = _tv_url(tv_symbol)
+    if q:
+        last, chg = q
+        color = "#16c784" if chg >= 0 else "#ea3943"
+        arrow = "▲" if chg >= 0 else "▼"
+        inner = _badge(label, f'{last:,.2f} <span style="color:{color};">{arrow} {chg:+.2f}%</span>', color)
+    else:
+        inner = _badge(label, "--", "#555")
+    t = f' title="{note}"' if note else ""
+    return f'<a href="{url}" target="_blank"{t} style="text-decoration:none;">{inner}</a>'
+
+
+@st.cache_data(show_spinner=False, ttl=3600)  # scrip master badi CSV hai - ghante me ek baar
+def _mcx_front_ids_cached() -> dict:
+    """MCX commodity -> nearest non-expired FUTCOM security id (Dhan scrip master)."""
+    try:
+        import io
+        import global_live as gl
+        names = sorted({it["mcx"] for it in gi.TOP_GLOBAL if it.get("mcx")})
+        resp = requests.get(gl.MCX_MASTER_URL, timeout=20)
+        df = pd.read_csv(io.StringIO(resp.text), low_memory=False)
+        return gl.pick_mcx_front_ids(df, names)
+    except Exception as e:
+        print(f"MCX master resolve error: {e}")
+        return {}
+
+
+@st.cache_data(show_spinner=False, ttl=5)  # Dhan live quote - tape ki tarah 5s cache
+def _mcx_quotes_cached(client_id: str, access_token: str, pairs: tuple) -> dict:
+    """pairs = ((commodity, security_id), ...) -> {commodity: {ltp, change_pct, source}}"""
+    out = {}
+    if not (client_id and access_token and pairs):
+        return out
+    try:
+        import global_live as gl
+        from fast_live_price import _dhan_client
+        client = _dhan_client(client_id, access_token)
+        if client is None:
+            return out
+        resp = client.quote_data(securities={"MCX_COMM": [int(sid) for _, sid in pairs]})
+        data = resp.get("data") if isinstance(resp, dict) else None
+        sec = (data or {}).get("MCX_COMM") or {}
+        for name, sid in pairs:
+            parsed = gl.parse_mcx_quote(sec.get(str(sid)))
+            if parsed:
+                out[name] = parsed
+    except Exception as e:
+        print(f"MCX quote error: {e}")
+    return out
+
+
+def _mcx_quotes_for_ui() -> dict:
+    """Dhan configured ho to MCX quotes; nahi to {} (chips '--' dikhenge)."""
+    try:
+        from secure_config import is_dhan_configured, get_dhan_creds
+        if not is_dhan_configured():
+            return {}
+        cid, tok = get_dhan_creds()
+    except Exception:
+        return {}
+    ids = _mcx_front_ids_cached()
+    if not ids:
+        return {}
+    return _mcx_quotes_cached(cid, tok, tuple(sorted(ids.items())))
+
+
+def render_top_global_html() -> str:
+    """Top Global row: spot (Yahoo/global) chip + MCX futures ka alag chip. Sab TradingView se linked."""
+    quotes = cached_market_watch() or {}
+    mcx = _mcx_quotes_for_ui() or {}
+    chips = []
+    for it in gi.TOP_GLOBAL:
+        chips.append(_quote_chip(it["label"], it["tv"], quotes.get(it["yahoo"])))
+        if it.get("mcx"):
+            m = mcx.get(it["mcx"])
+            chips.append(_quote_chip(f"MCX {it['mcx']}", it["tv_mcx"], (m["ltp"], m["change_pct"]) if m else None))
+    return "".join(chips)
+
+
 def render_market_watch():
     """Top tape: GIFT NIFTY, NIFTY, BANK NIFTY, USD/INR, XAUUSD, SPOTCRUDE + TLT + FII/DII"""
     quotes = {}
@@ -1087,7 +1174,7 @@ def render_market_watch():
     chips = []
     for item in gi.MARKET_WATCH:
         q = quotes.get(item["yahoo"])
-        url = f"https://www.tradingview.com/chart/?symbol={item['tv'].replace(':', '%3A')}"
+        url = _tv_url(item["tv"])
         lbl = "GIFT NIFTY*" if item["label"] == "GIFT NIFTY" else item["label"]  # * = proxy, caption me note
         if q:
             last, chg = q
@@ -1096,7 +1183,9 @@ def render_market_watch():
             inner = _badge(lbl, f'{last:,.2f} <span style="color:{color};">{arrow} {chg:+.2f}%</span>', color)
         else:
             inner = _badge(lbl, "--", "#555")
-        chips.append(f'<a href="{url}" target="_blank" style="text-decoration:none;">{inner}</a>')
+        _note = str(item.get("note", "")).replace('"', "'")
+        _t = f' title="{_note}"' if _note else ""
+        chips.append(f'<a href="{url}" target="_blank"{_t} style="text-decoration:none;">{inner}</a>')
 
     # TLT badge (CACHED - pehle har rerun par bina cache yfinance call lag rahi thi = tape slow)
     try:
@@ -1105,7 +1194,7 @@ def render_market_watch():
             last, chg = _tlt
             arrow = "▲" if chg >= 0 else "▼"
             color = "#16c784" if chg >= 0 else "#ea3943"
-            chips.append(_badge("TLT", f'{last:.2f} <span style="color:{color};">{arrow} {chg:+.2f}%</span>', color))
+            chips.append(f'<a href="{_tv_url("NASDAQ:TLT")}" target="_blank" style="text-decoration:none;">' + _badge("TLT", f'{last:.2f} <span style="color:{color};">{arrow} {chg:+.2f}%</span>', color) + "</a>")
     except Exception:
         pass
 
@@ -1373,6 +1462,14 @@ if PULSE_AVAILABLE:
         print(f"Pulse strip error (safe, app chalega): {_e}")
 if _tape_html.strip() and not _tape_done:
     st.markdown('<div style="display:flex;flex-wrap:wrap;align-items:center;gap:2px;">' + _tape_html + "</div>", unsafe_allow_html=True)
+
+# Top Global Instruments row (spot + MCX alag symbol) - har chip TradingView chart se linked
+try:
+    _global_html = render_top_global_html()
+    if _global_html:
+        st.markdown('<div style="display:flex;flex-wrap:wrap;align-items:center;gap:2px;">' + _global_html + "</div>", unsafe_allow_html=True)
+except Exception as _e:
+    print(f"Top global row error (safe): {_e}")
 
 # (Auto-Refresh ka call page ke neeche hai - top area me khaali space na bane)
 

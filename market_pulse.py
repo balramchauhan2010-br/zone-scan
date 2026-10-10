@@ -1027,7 +1027,11 @@ def get_global_bias() -> dict:
         print(f"global bias error: {e}")
     try:
         import data_fetch
-        q = data_fetch.fetch_market_watch_quotes(["DX-Y.NYB", "USDINR=X", "CL=F", "GC=F"])
+        import global_instruments as _gi
+        _top_items = list(_gi.TOP_GLOBAL)
+        q = data_fetch.fetch_market_watch_quotes(["DX-Y.NYB", "USDINR=X", "CL=F", "GC=F"] + _gi.top_global_yahoo())
+        # AI summary ke liye current Top Global cues: {label: (last, chg_pct)}
+        out["top"] = {it["label"]: q.get(it["yahoo"]) for it in _top_items if q.get(it["yahoo"])}
         out["dxy"] = q.get("DX-Y.NYB")
         out["usdinr"] = q.get("USDINR=X")
         out["crude"] = q.get("CL=F")
@@ -1187,6 +1191,16 @@ def generate_ai_summary(*, phase: str, breadth: dict, delivery_stats: dict,
         drivers.append(f"DII buying {dii_net:+.0f} Cr — desi institutions ne FII selling sambhala")
     elif dii_net < 0 and fii_net > 0:
         drivers.append(f"DII selling {dii_net:+.0f} Cr — lekin FII zyada mazboot hain")
+
+    # ---- top global cues (live, informational) ----
+    top = (glob or {}).get("top") or {}
+    cue_parts = []
+    for lab in ("COPPER", "NATURAL GAS", "XAU/USD", "USD/JPY", "BITCOIN/USD"):
+        v = top.get(lab)
+        if isinstance(v, tuple) and len(v) == 2:
+            cue_parts.append(f"{lab} {float(v[1]):+.2f}%")
+    if cue_parts:
+        drivers.append("Top global cues (live): " + " | ".join(cue_parts))
 
     # ---- global ----
     if glob:

@@ -45,7 +45,7 @@ _PROXY_LABELS = {"GIFT NIFTY"}
 _SYM_RE = re.compile(r"^[A-Z0-9&\-_]{1,25}$")
 
 # Plain dikhte hain par Yahoo-only (US ETFs) - NSE_EQ me mat jao
-_YAHOO_PLAIN = {"TLT", "SPY", "QQQ", "DIA", "IWM", "GLD", "SLV", "USO", "UVXY", "VIX"}
+_YAHOO_PLAIN = {"TLT", "SPY", "QQQ", "DIA", "IWM", "GLD", "SLV", "USO", "UVXY", "VIX", "BTC-USD"}
 
 
 def _classify(symbols: Tuple[str, ...]):
