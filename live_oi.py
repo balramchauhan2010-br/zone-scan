@@ -129,8 +129,8 @@ def _dhan_futures_map_cached(today_iso: str) -> Dict[str, dict]:
     need = {"SEM_EXM_EXCH_ID", "SEM_INSTRUMENT_NAME", "SEM_TRADING_SYMBOL",
             "SEM_SMST_SECURITY_ID", "SEM_EXPIRY_DATE"}
     if not need.issubset(df.columns):
-        print(f"live_oi: Dhan master columns missing: {sorted(need - set(df.columns))}")
-        return {}
+        # exception -> cache nahi hota (khaali {} 24h na atke)
+        raise RuntimeError(f"Dhan master columns missing: {sorted(need - set(df.columns))}")
     fut = df[(df["SEM_EXM_EXCH_ID"] == "NSE") & (df["SEM_INSTRUMENT_NAME"] == "FUTSTK")]
     rows = []
     for _, r in fut.iterrows():
@@ -141,7 +141,10 @@ def _dhan_futures_map_cached(today_iso: str) -> Dict[str, dict]:
         except (TypeError, ValueError):
             continue
         rows.append((sym, exp, sid))
-    return pick_front_month(rows, dt.date.fromisoformat(today_iso))
+    res = pick_front_month(rows, dt.date.fromisoformat(today_iso))
+    if not res:
+        raise RuntimeError("Dhan master: NSE FUTSTK rows nahi mili")
+    return res
 
 
 def parse_dhan_quotes(resp: dict, id_to_sym: Dict[str, str]) -> Dict[str, dict]:

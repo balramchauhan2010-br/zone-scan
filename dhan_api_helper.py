@@ -79,6 +79,9 @@ def _build_master_mapping() -> dict:
                 mapping["BANKNIFTY"] = {"security_id": sec_id, "segment": "IDX_I"}
     except Exception:
         pass
+    # NSE EQ rows ek bhi nahi mili -> exception (cache_data me galat/adhoora mapping 24h na atke)
+    if not any(v.get("segment") == "NSE_EQ" for v in mapping.values()):
+        raise RuntimeError("Dhan master: NSE EQ rows parse nahi hui")
     # Hardcode known indices for speed if master partly fails
     if "NIFTY" not in mapping:
         mapping["NIFTY"] = {"security_id": "13", "segment": "IDX_I"}

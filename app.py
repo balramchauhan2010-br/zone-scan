@@ -237,65 +237,24 @@ with secure_col:
 
 # ---------- Auto Refresh on Candle Close - Small TF Only ----------
 def get_seconds_to_next_close(tf_str: str) -> int:
-    """TF string like '15m', '30m', '1H', '2H', '4H', '1m', '5m' -> seconds to next candle close"""
-    from datetime import timedelta
-    now = datetime.now()
-    tf = tf_str.lower()
-    if tf in ["1m", "1"]:
-        next_close = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
-    elif tf in ["5m", "5"]:
-        mins = (now.minute // 5 + 1) * 5
-        if mins >= 60:
-            next_close = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-        else:
-            next_close = now.replace(minute=mins, second=0, microsecond=0)
-    elif tf in ["15m", "15"]:
-        mins = (now.minute // 15 + 1) * 15
-        if mins >= 60:
-            next_close = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-        else:
-            next_close = now.replace(minute=mins, second=0, microsecond=0)
-    elif tf in ["30m", "30"]:
-        mins = (now.minute // 30 + 1) * 30
-        if mins >= 60:
-            next_close = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-        else:
-            next_close = now.replace(minute=mins, second=0, microsecond=0)
-    elif tf in ["1h", "60m"]:
-        next_close = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
-    elif tf in ["2h", "2"]:
-        next_hour = ((now.hour // 2 + 1) * 2) % 24
-        next_close = now.replace(minute=0, second=0, microsecond=0)
-        if next_hour <= now.hour:
-            next_close += timedelta(days=1)
-            next_close = next_close.replace(hour=next_hour)
-        else:
-            next_close = next_close.replace(hour=next_hour)
-    elif tf in ["4h", "4"]:
-        next_hour = ((now.hour // 4 + 1) * 4) % 24
-        next_close = now.replace(minute=0, second=0, microsecond=0)
-        if next_hour <= now.hour:
-            next_close += timedelta(days=1)
-        next_close = next_close.replace(hour=next_hour)
-    elif tf in ["75m", "75"]:
-        rem = 75 - (now.hour * 60 + now.minute) % 75
-        next_close = now + timedelta(minutes=rem)
-        next_close = next_close.replace(second=0, microsecond=0)
-    else:
-        return 999999
-    delta = (next_close - now).total_seconds()
-    return max(1, int(delta))
+    """TF string ('15m', '30m', '1H', '2H', '4H', '75m', '6H', '1m', '5m') -> seconds to next candle close.
+    Scanner ke SAME NSE 09:15-grid aur IST clock par (candle_clock.seconds_to_next_close).
+    Market band ho ya TF unknown ho to 999999 (= 'koi countdown nahi')."""
+    _tf = {"60m": "1H", "1h": "1H", "2h": "2H", "4h": "4H", "6h": "6H"}.get(str(tf_str).lower(), str(tf_str))
+    _sec = cc.seconds_to_next_close(_tf)
+    return 999999 if _sec is None else _sec
 
 
 def get_next_candle_close_info(selected_tfs):
-    """Return smallest seconds to next close among selected small TFs"""
-    small_tfs = ["1m", "5m", "15m", "30m", "1H", "2H", "4H", "75m", "6H"]
-    relevant = [tf for tf in selected_tfs if tf in small_tfs or tf.lower() in [s.lower() for s in small_tfs]]
-    if not relevant:
-        return None, None
+    """Smallest seconds to next close among selected small TFs -> (tf, secs), or (None, None)."""
+    # Intraday TF sab (3m, 5m, 10m, 15m, 30m, 75m, 1H, 2H, 4H, 6H, 1m ...). Daily/Weekly/Monthly
+    # candle_clock me None -> 999999 se apne-aap bahar. Hardcoded list nahi (3m/10m chhoot jaate the).
+    relevant = [tf for tf in selected_tfs if tf]
     times = [(tf, get_seconds_to_next_close(tf)) for tf in relevant]
-    times_sorted = sorted(times, key=lambda x: x[1])
-    return times_sorted[0]
+    times = [x for x in times if x[1] < 999999]
+    if not times:
+        return None, None
+    return min(times, key=lambda x: x[1])
 
 
 # Auto refresh state
@@ -399,6 +358,8 @@ with settings_pop:
     global_tickers = [it["yahoo"] for it in gi.GLOBAL_INSTRUMENTS]
     tickers = tuple(dict.fromkeys(fno_tickers + global_tickers))
     st.caption(f"NSE F&O: {len(fno_tickers)} ({universe_source}) · Top Global: {len(global_tickers)} · total scan {len(tickers)}")
+    if not fno_tickers:
+        st.warning("NSE F&O universe khali hai. Sirf Top Global instruments scan honge.")
 
     st.markdown("---")
     st.subheader("🔍 Filters (Common)")
@@ -524,7 +485,7 @@ with settings_pop:
             _nc = get_next_candle_close_info(tf_selected)
         except Exception:
             _nc = None
-    if st.session_state.auto_refresh_enabled and _nc:
+    if st.session_state.auto_refresh_enabled and _nc and _nc[0] and _nc[1]:
         st.caption(f"⏳ Agla refresh: {_nc[0]} candle close in {_nc[1] // 60}m {_nc[1] % 60}s")
     elif not st.session_state.auto_refresh_enabled:
         st.caption("⏸️ Auto-Refresh OFF")
@@ -1310,21 +1271,30 @@ def apply_display_filters(df):
 def cached_live_ltp(tickers_tuple, use_dhan):
     """Displayed tickers ke live prices: Dhan (5s cache) > Yahoo (20s cache)."""
     out = {}
-    syms = [str(t).replace(".NS", "") for t in tickers_tuple]
-    if use_dhan:
+    raw = [str(t) for t in tickers_tuple]
+    # Global instruments (^GSPC, GC=F, BTC-USD ...) ka yahoo symbol waisa hi use hota hai (".NS" nahi jodna)
+    _gset = {it["yahoo"] for it in gi.GLOBAL_INSTRUMENTS}
+    g_raw = [t for t in raw if t in _gset]
+    nse_raw = [t.replace(".NS", "") for t in raw if t not in _gset]
+    if use_dhan and nse_raw:
         try:
-            out.update(cached_dhan_ltp_if_available(tuple(syms)) or {})
+            out.update(cached_dhan_ltp_if_available(tuple(nse_raw)) or {})
         except Exception:
             pass
     try:
         from fast_live_price import get_live_price_hybrid_ultra_fast
-        missing = [s for s in syms if s not in out]
-        if missing:
-            yh = get_live_price_hybrid_ultra_fast(tuple(f"{s}.NS" for s in missing))
+        missing = [s for s in nse_raw if s not in out]
+        yh_req = tuple([f"{s}.NS" for s in missing] + g_raw)
+        if yh_req:
+            yh = get_live_price_hybrid_ultra_fast(yh_req)
             for s in missing:
                 d = yh.get(f"{s}.NS")
                 if d and d.get("ltp"):
                     out[s] = d
+            for g in g_raw:
+                d = yh.get(g)
+                if d and d.get("ltp"):
+                    out[g] = d
     except Exception as e:
         print(f"live LTP yahoo path error: {e}")
     return out
@@ -1966,19 +1936,14 @@ def render_table_main(df, file_label, all_frames=None, is_global=False):
         return pd.DataFrame()
 
     display_df = _add_hypothesis(df.copy())
-    display_df, ltp_info = overlay_live_prices(display_df)
+    display_df, _ltp_info = overlay_live_prices(display_df)  # status line hata di; prices refresh hote hain
     _q = st.text_input("🔍 Symbol search", value="", key=f"search_{file_label}",
                        placeholder="Jaise: RELI, HDFC, M&M...", help="Table ko turant filter karo (scan nahi hota)").strip().upper()
     if _q:
         display_df = display_df[display_df["Ticker"].astype(str).str.upper().str.contains(_q, na=False)]
         st.caption(f"🔎 Search '{_q}': {len(display_df)} zones mile")
     _show_clean_table(display_df, "Symbol")
-    if ltp_info:
-        st.caption(ltp_info)
 
-    csv = df.drop(columns=["Ticker"]).to_csv(index=False).encode("utf-8")
-    with st.expander("⬇️ CSV Download", expanded=False):
-        st.download_button("⬇️ Download zones as CSV", csv, file_name=f"zones_{file_label}.csv", mime="text/csv")
     return display_df
 
 
@@ -2017,19 +1982,14 @@ def render_table_validated(df, file_label, all_frames=None, is_global=False):
         return pd.DataFrame()
 
     display_df = _add_hypothesis(df.copy())
-    display_df, ltp_info = overlay_live_prices(display_df)
+    display_df, _ltp_info = overlay_live_prices(display_df)  # status line hata di; prices refresh hote hain
     _vq = st.text_input("🔍 Symbol search", value="", key=f"vsearch_{file_label}",
                         placeholder="Jaise: RELI, HDFC, M&M...", help="Table ko turant filter karo (scan nahi hota)").strip().upper()
     if _vq:
         display_df = display_df[display_df["Ticker"].astype(str).str.upper().str.contains(_vq, na=False)]
         st.caption(f"🔎 Search '{_vq}': {len(display_df)} validated zones mile")
     _show_clean_table(display_df, "Symbol")
-    if ltp_info:
-        st.caption(ltp_info)
 
-    csv = df.drop(columns=["Ticker"]).to_csv(index=False).encode("utf-8")
-    with st.expander("⬇️ CSV Download", expanded=False):
-        st.download_button("⬇️ Download VALIDATED zones as CSV", csv, file_name=f"validated_zones_{file_label}.csv", mime="text/csv")
     return display_df
 
 
@@ -2045,6 +2005,8 @@ all_frames_store = {}
 
 combined = pd.DataFrame()
 combined_v = pd.DataFrame()
+combined_fno = pd.DataFrame()    # sirf NSE F&O zones (Pulse / trade selector / selection)
+combined_v_fno = pd.DataFrame()
 
 if "Main" in st.session_state.app_page:
     if "main_scan_results" not in st.session_state:
@@ -2498,7 +2460,7 @@ else:
 # Indian News events -> AI short summary (matlab + forecast) + Top 10 Buy / Top 10 Sell.
 if PULSE_AVAILABLE:
     try:
-        _zones_for_pulse = combined if (combined is not None and not combined.empty) else combined_v
+        _zones_for_pulse = combined_fno if (combined_fno is not None and not combined_fno.empty) else combined_v_fno
         if _zones_for_pulse is None:
             _zones_for_pulse = pd.DataFrame()
         mp.render_ai_trader_pulse(_zones_for_pulse, tuple(all_tickers))
@@ -2533,10 +2495,10 @@ with tab_autotrade:
         paper = st.checkbox("Paper Trading (Safe - Real order nahi lagega)", value=True, key="paper_trading", help="ON rakho to real order nahi lagega, sirf log. OFF karne par real order lagega - careful!")
         qty = st.number_input("Quantity (Max 100 for safety)", min_value=1, max_value=100, value=1, key="auto_qty")
 
-        if "Main" in st.session_state.app_page and not combined.empty:
-            combined_for_trade = combined
-        elif not combined_v.empty:
-            combined_for_trade = combined_v
+        if "Main" in st.session_state.app_page and not combined_fno.empty:
+            combined_for_trade = combined_fno
+        elif not combined_v_fno.empty:
+            combined_for_trade = combined_v_fno
         else:
             combined_for_trade = pd.DataFrame()
 

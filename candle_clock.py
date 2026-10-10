@@ -162,13 +162,19 @@ def last_closed_bucket(tf: str, now: pd.Timestamp = None) -> pd.Timestamp:
     base, slots, group = _grid_for(tf)
     today = now.date()
     closed_today = 0
+    session_over = False
     if is_trading_day(today):
-        o, _ = _open_close_dt(today)
+        o, c = _open_close_dt(today)
         if now >= o:
             elapsed_min = (now - o).total_seconds() / 60.0
             closed_today = min(slots, int(elapsed_min // base))
+        session_over = now >= c
 
-    grouped_closed_today = closed_today // group
+    if session_over:
+        # Session khatam: saare slots band, aakhri adhoora group (jaise 60m grid ka 15:15-15:30) bhi closed
+        grouped_closed_today = -(-slots // group)
+    else:
+        grouped_closed_today = closed_today // group
     if grouped_closed_today > 0:
         bar_index = grouped_closed_today - 1
         bucket_date = today
@@ -187,6 +193,28 @@ def today_or_prev_fully_closed(now: pd.Timestamp) -> dt.date:
         if now >= c:
             return today
     return previous_trading_day(today) if is_trading_day(today) else last_trading_day_on_or_before(today - dt.timedelta(days=1))
+
+
+def seconds_to_next_close(tf: str, now: pd.Timestamp = None) -> Optional[int]:
+    """Seconds until the NEXT candle of `tf` closes, on the SAME NSE 09:15-grid
+    that last_closed_bucket() uses (IST, not server-local time).
+    None when the market is closed today or the timeframe is unknown."""
+    now = now or now_ist()
+    try:
+        base, slots, group = _grid_for(tf)
+    except ValueError:
+        return None
+    d = now.date()
+    if not is_trading_day(d):
+        return None
+    o, c = _open_close_dt(d)
+    if now < o or now >= c:
+        return None
+    closed = min(slots, int((now - o).total_seconds() // 60 // base))
+    next_slot = min(((closed // group) + 1) * group, slots)
+    # last slot 15 min wide (60m grid): close never goes past the session close
+    close_ts = min(o + dt.timedelta(minutes=next_slot * base), c)
+    return max(1, int((close_ts - now).total_seconds()))
 
 
 def next_close_eta(tf: str, now: pd.Timestamp = None) -> str:
