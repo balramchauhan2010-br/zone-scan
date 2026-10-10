@@ -28,7 +28,6 @@ tolerant parsing se pakde jaate hain. Verify karne ke liye:
 from __future__ import annotations
 
 import datetime as dt
-import io
 import re
 import time
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -112,17 +111,21 @@ def pick_front_month(rows: Iterable[Tuple[str, dt.date, str]], today: dt.date) -
 
 # ----------------------------------------------------------------- Dhan
 
-@st.cache_data(show_spinner=False, ttl=24 * 3600)
 def load_dhan_futures_map(today_iso: str) -> Dict[str, dict]:
     """Dhan scrip-master se NSE stock-futures ke front-month security IDs.
-    Fail -> {} (caller EOD/NSE fallback par chala jaata hai)."""
+    Fail -> {} (caller EOD/NSE fallback par chala jaata hai). {} kabhi cache nahi hota."""
     try:
-        resp = requests.get(DHAN_MASTER_URL, timeout=20)
-        resp.raise_for_status()
-        df = pd.read_csv(io.StringIO(resp.text), low_memory=False)
+        return _dhan_futures_map_cached(today_iso)
     except Exception as e:
         print(f"live_oi: Dhan master download failed: {e!r}"[:200])
         return {}
+
+
+@st.cache_data(show_spinner=False, ttl=24 * 3600)
+def _dhan_futures_map_cached(today_iso: str) -> Dict[str, dict]:
+    """Download fail -> exception (cache nahi hota, agle call par retry/backoff)."""
+    from dhan_api_helper import download_dhan_master_df
+    df = download_dhan_master_df()
     need = {"SEM_EXM_EXCH_ID", "SEM_INSTRUMENT_NAME", "SEM_TRADING_SYMBOL",
             "SEM_SMST_SECURITY_ID", "SEM_EXPIRY_DATE"}
     if not need.issubset(df.columns):

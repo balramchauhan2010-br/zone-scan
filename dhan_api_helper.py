@@ -4,6 +4,7 @@ Fixes: Price delay, slow open, uses Dhan when connected for fast LTP
 """
 
 import os
+import time
 import pandas as pd
 import requests
 import io
@@ -16,66 +17,88 @@ try:
 except ImportError:
     DHAN_AVAILABLE = False
 
-# Cache master CSV for 1 day - fast
-@st.cache_data(show_spinner=False, ttl=24*3600)
-def load_dhan_master_fast():
-    """Dhan master CSV - NSE symbol -> security ID mapping - cached 24h for speed"""
-    url = "https://images.dhan.co/api-data/api-scrip-master.csv"
+_DHAN_MASTER_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
+_MASTER_RETRY_AFTER_FAIL_SEC = 300  # download fail -> 5 min tak dobara network call nahi (har 5s par 20s block se bachao)
+_master_backoff = {"until": 0.0}
+
+
+@st.cache_data(show_spinner=False, ttl=24 * 3600)
+def download_dhan_master_df() -> pd.DataFrame:
+    """Dhan scrip master CSV - ek hi download, 24h cache.
+    Fail hone par EXCEPTION uthta hai: st.cache_data exception ko cache nahi karta,
+    isliye galat/khaali result 24 ghante ke liye nahi atakta."""
+    if time.time() < _master_backoff["until"]:
+        raise RuntimeError("Dhan master: recent download fail, backoff active")
     try:
-        resp = requests.get(url, timeout=10)
-        df = pd.read_csv(io.StringIO(resp.text))
-        # Filter NSE EQ and IDX
-        # SEM_EXM_EXCH_ID: NSE, BSE, etc. SEM_SEGMENT: EQ, IDX_I etc
-        mapping = {}
-        # For EQ
-        try:
-            nse_eq = df[(df["SEM_EXM_EXCH_ID"] == "NSE") & (df["SEM_SEGMENT"] == "EQ")]
-            for _, row in nse_eq.iterrows():
-                sym = str(row["SEM_TRADING_SYMBOL"]).strip().upper()
-                sec_id = str(row["SEM_SMST_SECURITY_ID"]).strip()
-                mapping[sym] = {"security_id": sec_id, "segment": "NSE_EQ"}
-        except Exception:
-            pass
-        # For IDX (NIFTY, BANKNIFTY)
-        try:
-            idx = df[df["SEM_SEGMENT"] == "IDX_I"]
-            for _, row in idx.iterrows():
-                sym = str(row["SEM_TRADING_SYMBOL"]).strip().upper()
-                # Also check display name
-                sec_id = str(row["SEM_SMST_SECURITY_ID"]).strip()
-                mapping[sym] = {"security_id": sec_id, "segment": "IDX_I"}
-                # Add common aliases
-                if "NIFTY 50" in sym or sym == "NIFTY":
-                    mapping["NIFTY 50"] = {"security_id": sec_id, "segment": "IDX_I"}
-                    mapping["NIFTY"] = {"security_id": sec_id, "segment": "IDX_I"}
-                if "BANK" in sym and "NIFTY" in sym:
-                    mapping["BANK NIFTY"] = {"security_id": sec_id, "segment": "IDX_I"}
-                    mapping["BANKNIFTY"] = {"security_id": sec_id, "segment": "IDX_I"}
-        except Exception:
-            pass
-        
-        # Hardcode known indices for speed if master fails
-        if "NIFTY" not in mapping:
-            mapping["NIFTY"] = {"security_id": "13", "segment": "IDX_I"}
-            mapping["NIFTY 50"] = {"security_id": "13", "segment": "IDX_I"}
-        if "BANKNIFTY" not in mapping:
-            mapping["BANKNIFTY"] = {"security_id": "25", "segment": "IDX_I"}
-            mapping["BANK NIFTY"] = {"security_id": "25", "segment": "IDX_I"}
-        if "FINNIFTY" not in mapping:
-            mapping["FINNIFTY"] = {"security_id": "27", "segment": "IDX_I"}
-        
-        return mapping
+        resp = requests.get(_DHAN_MASTER_URL, timeout=20)
+        resp.raise_for_status()
+        return pd.read_csv(io.StringIO(resp.text), low_memory=False)
+    except Exception:
+        _master_backoff["until"] = time.time() + _MASTER_RETRY_AFTER_FAIL_SEC
+        raise
+
+
+def _fallback_master() -> dict:
+    """Master na mile to hardcoded index IDs + RELIANCE (cache me nahi jata)."""
+    return {
+        "NIFTY": {"security_id": "13", "segment": "IDX_I"},
+        "NIFTY 50": {"security_id": "13", "segment": "IDX_I"},
+        "BANKNIFTY": {"security_id": "25", "segment": "IDX_I"},
+        "BANK NIFTY": {"security_id": "25", "segment": "IDX_I"},
+        "FINNIFTY": {"security_id": "27", "segment": "IDX_I"},
+        "RELIANCE": {"security_id": "11536", "segment": "NSE_EQ"},
+    }
+
+
+@st.cache_data(show_spinner=False, ttl=24 * 3600)
+def _build_master_mapping() -> dict:
+    """NSE symbol -> security ID mapping (download fail par exception -> cache nahi)."""
+    df = download_dhan_master_df()
+    mapping = {}
+    # For EQ
+    try:
+        nse_eq = df[(df["SEM_EXM_EXCH_ID"] == "NSE") & (df["SEM_SEGMENT"] == "EQ")]
+        for _, row in nse_eq.iterrows():
+            sym = str(row["SEM_TRADING_SYMBOL"]).strip().upper()
+            sec_id = str(row["SEM_SMST_SECURITY_ID"]).strip()
+            mapping[sym] = {"security_id": sec_id, "segment": "NSE_EQ"}
+    except Exception:
+        pass
+    # For IDX (NIFTY, BANKNIFTY)
+    try:
+        idx = df[df["SEM_SEGMENT"] == "IDX_I"]
+        for _, row in idx.iterrows():
+            sym = str(row["SEM_TRADING_SYMBOL"]).strip().upper()
+            sec_id = str(row["SEM_SMST_SECURITY_ID"]).strip()
+            mapping[sym] = {"security_id": sec_id, "segment": "IDX_I"}
+            if "NIFTY 50" in sym or sym == "NIFTY":
+                mapping["NIFTY 50"] = {"security_id": sec_id, "segment": "IDX_I"}
+                mapping["NIFTY"] = {"security_id": sec_id, "segment": "IDX_I"}
+            if "BANK" in sym and "NIFTY" in sym:
+                mapping["BANK NIFTY"] = {"security_id": sec_id, "segment": "IDX_I"}
+                mapping["BANKNIFTY"] = {"security_id": sec_id, "segment": "IDX_I"}
+    except Exception:
+        pass
+    # Hardcode known indices for speed if master partly fails
+    if "NIFTY" not in mapping:
+        mapping["NIFTY"] = {"security_id": "13", "segment": "IDX_I"}
+        mapping["NIFTY 50"] = {"security_id": "13", "segment": "IDX_I"}
+    if "BANKNIFTY" not in mapping:
+        mapping["BANKNIFTY"] = {"security_id": "25", "segment": "IDX_I"}
+        mapping["BANK NIFTY"] = {"security_id": "25", "segment": "IDX_I"}
+    if "FINNIFTY" not in mapping:
+        mapping["FINNIFTY"] = {"security_id": "27", "segment": "IDX_I"}
+    return mapping
+
+
+def load_dhan_master_fast() -> dict:
+    """Dhan master mapping. Success 24h cache; failure par fallback (uncached) + backoff."""
+    try:
+        return _build_master_mapping()
     except Exception as e:
         print(f"Dhan master fast load error: {e}")
-        # Fallback hardcoded
-        return {
-            "NIFTY": {"security_id": "13", "segment": "IDX_I"},
-            "NIFTY 50": {"security_id": "13", "segment": "IDX_I"},
-            "BANKNIFTY": {"security_id": "25", "segment": "IDX_I"},
-            "BANK NIFTY": {"security_id": "25", "segment": "IDX_I"},
-            "FINNIFTY": {"security_id": "27", "segment": "IDX_I"},
-            "RELIANCE": {"security_id": "11536", "segment": "NSE_EQ"},
-        }
+        return _fallback_master()
+
 
 def get_dhan_client(client_id: str, access_token: str):
     """SINGLETON dhanhq client (cache_resource) - har call par naya connection
@@ -214,9 +237,9 @@ def get_dhan_market_watch_fast(client_id: str, access_token: str):
         if "NIFTY 50" in dhan_prices or "NIFTY" in dhan_prices:
             nifty_data = dhan_prices.get("NIFTY 50") or dhan_prices.get("NIFTY")
             if nifty_data:
-                # Map to ^NSEI and GIFT NIFTY (approx)
+                # NIFTY 50 spot -> ^NSEI. GIFT NIFTY ka real feed nahi hai: use NIFTY spot ki PROXY value
+                # (koi +0.2% adjustment NAHI - pehle comment galat tha). Display me "*" se proxy dikhta hai.
                 result["^NSEI"] = (nifty_data["ltp"], nifty_data["change_pct"])
-                # GIFT NIFTY is NIFTY + ~0.2% approx, use same
                 result["GIFT_NIFTY"] = (nifty_data["ltp"], nifty_data["change_pct"])
         if "BANK NIFTY" in dhan_prices or "BANKNIFTY" in dhan_prices:
             bank_data = dhan_prices.get("BANK NIFTY") or dhan_prices.get("BANKNIFTY")

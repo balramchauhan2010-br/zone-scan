@@ -39,7 +39,6 @@ import pandas as pd
 import streamlit as st
 import numpy as np
 import os
-import requests
 from datetime import datetime, timedelta
 
 import data_fetch
@@ -235,6 +234,76 @@ with secure_col:
     else:
         status_html += '<span style="background:#5552;border:1px solid #555;border-radius:6px;padding:3px 8px;margin:2px;font-size:11px;color:#888;">○ Gemini (optional)</span>'
     st.markdown(status_html, unsafe_allow_html=True)
+
+# ---------- Auto Refresh on Candle Close - Small TF Only ----------
+def get_seconds_to_next_close(tf_str: str) -> int:
+    """TF string like '15m', '30m', '1H', '2H', '4H', '1m', '5m' -> seconds to next candle close"""
+    from datetime import timedelta
+    now = datetime.now()
+    tf = tf_str.lower()
+    if tf in ["1m", "1"]:
+        next_close = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
+    elif tf in ["5m", "5"]:
+        mins = (now.minute // 5 + 1) * 5
+        if mins >= 60:
+            next_close = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        else:
+            next_close = now.replace(minute=mins, second=0, microsecond=0)
+    elif tf in ["15m", "15"]:
+        mins = (now.minute // 15 + 1) * 15
+        if mins >= 60:
+            next_close = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        else:
+            next_close = now.replace(minute=mins, second=0, microsecond=0)
+    elif tf in ["30m", "30"]:
+        mins = (now.minute // 30 + 1) * 30
+        if mins >= 60:
+            next_close = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        else:
+            next_close = now.replace(minute=mins, second=0, microsecond=0)
+    elif tf in ["1h", "60m"]:
+        next_close = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+    elif tf in ["2h", "2"]:
+        next_hour = ((now.hour // 2 + 1) * 2) % 24
+        next_close = now.replace(minute=0, second=0, microsecond=0)
+        if next_hour <= now.hour:
+            next_close += timedelta(days=1)
+            next_close = next_close.replace(hour=next_hour)
+        else:
+            next_close = next_close.replace(hour=next_hour)
+    elif tf in ["4h", "4"]:
+        next_hour = ((now.hour // 4 + 1) * 4) % 24
+        next_close = now.replace(minute=0, second=0, microsecond=0)
+        if next_hour <= now.hour:
+            next_close += timedelta(days=1)
+        next_close = next_close.replace(hour=next_hour)
+    elif tf in ["75m", "75"]:
+        rem = 75 - (now.hour * 60 + now.minute) % 75
+        next_close = now + timedelta(minutes=rem)
+        next_close = next_close.replace(second=0, microsecond=0)
+    else:
+        return 999999
+    delta = (next_close - now).total_seconds()
+    return max(1, int(delta))
+
+
+def get_next_candle_close_info(selected_tfs):
+    """Return smallest seconds to next close among selected small TFs"""
+    small_tfs = ["1m", "5m", "15m", "30m", "1H", "2H", "4H", "75m", "6H"]
+    relevant = [tf for tf in selected_tfs if tf in small_tfs or tf.lower() in [s.lower() for s in small_tfs]]
+    if not relevant:
+        return None, None
+    times = [(tf, get_seconds_to_next_close(tf)) for tf in relevant]
+    times_sorted = sorted(times, key=lambda x: x[1])
+    return times_sorted[0]
+
+
+# Auto refresh state
+if "auto_refresh_enabled" not in st.session_state:
+    st.session_state.auto_refresh_enabled = True
+if "last_refresh_tf" not in st.session_state:
+    st.session_state.last_refresh_tf = None
+
 
 with settings_pop:
     st.subheader("🧭 Page Navigation")
@@ -611,9 +680,13 @@ def cached_market_watch():
 
             if result:
                 try:
-                    yahoo_fallback = data_fetch.fetch_market_watch_quotes([item["yahoo"] for item in gi.all_watch_items()])
-                    merged = {**yahoo_fallback, **result}
-                    return merged
+                    # Sirf woh symbols jo Dhan/hybrid se nahi mile. Pehle har 5s poora Yahoo batch
+                    # bina cache ke dobara jata tha (latency + rate-limit ka kharcha).
+                    missing = [item["yahoo"] for item in gi.all_watch_items() if item["yahoo"] not in result]
+                    if missing:
+                        yahoo_fallback = data_fetch.fetch_market_watch_quotes(missing)
+                        return {**yahoo_fallback, **result}
+                    return result
                 except Exception:
                     return result
         except Exception as e:
@@ -964,76 +1037,6 @@ if force_rescan:
     st.toast("Cache cleared", icon="🔄")
 
 
-# ---------- Auto Refresh on Candle Close - Small TF Only ----------
-def get_seconds_to_next_close(tf_str: str) -> int:
-    """TF string like '15m', '30m', '1H', '2H', '4H', '1m', '5m' -> seconds to next candle close"""
-    from datetime import timedelta
-    now = datetime.now()
-    tf = tf_str.lower()
-    if tf in ["1m", "1"]:
-        next_close = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
-    elif tf in ["5m", "5"]:
-        mins = (now.minute // 5 + 1) * 5
-        if mins >= 60:
-            next_close = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-        else:
-            next_close = now.replace(minute=mins, second=0, microsecond=0)
-    elif tf in ["15m", "15"]:
-        mins = (now.minute // 15 + 1) * 15
-        if mins >= 60:
-            next_close = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-        else:
-            next_close = now.replace(minute=mins, second=0, microsecond=0)
-    elif tf in ["30m", "30"]:
-        mins = (now.minute // 30 + 1) * 30
-        if mins >= 60:
-            next_close = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-        else:
-            next_close = now.replace(minute=mins, second=0, microsecond=0)
-    elif tf in ["1h", "60m"]:
-        next_close = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
-    elif tf in ["2h", "2"]:
-        next_hour = ((now.hour // 2 + 1) * 2) % 24
-        next_close = now.replace(minute=0, second=0, microsecond=0)
-        if next_hour <= now.hour:
-            next_close += timedelta(days=1)
-            next_close = next_close.replace(hour=next_hour)
-        else:
-            next_close = next_close.replace(hour=next_hour)
-    elif tf in ["4h", "4"]:
-        next_hour = ((now.hour // 4 + 1) * 4) % 24
-        next_close = now.replace(minute=0, second=0, microsecond=0)
-        if next_hour <= now.hour:
-            next_close += timedelta(days=1)
-        next_close = next_close.replace(hour=next_hour)
-    elif tf in ["75m", "75"]:
-        rem = 75 - (now.hour * 60 + now.minute) % 75
-        next_close = now + timedelta(minutes=rem)
-        next_close = next_close.replace(second=0, microsecond=0)
-    else:
-        return 999999
-    delta = (next_close - now).total_seconds()
-    return max(1, int(delta))
-
-
-def get_next_candle_close_info(selected_tfs):
-    """Return smallest seconds to next close among selected small TFs"""
-    small_tfs = ["1m", "5m", "15m", "30m", "1H", "2H", "4H", "75m", "6H"]
-    relevant = [tf for tf in selected_tfs if tf in small_tfs or tf.lower() in [s.lower() for s in small_tfs]]
-    if not relevant:
-        return None, None
-    times = [(tf, get_seconds_to_next_close(tf)) for tf in relevant]
-    times_sorted = sorted(times, key=lambda x: x[1])
-    return times_sorted[0]
-
-
-# Auto refresh state
-if "auto_refresh_enabled" not in st.session_state:
-    st.session_state.auto_refresh_enabled = True
-if "last_refresh_tf" not in st.session_state:
-    st.session_state.last_refresh_tf = None
-
-
 def _badge(label, value, color):
     return f'<span style="background:{color}22;border:1px solid {color};border-radius:6px;padding:4px 10px;margin:3px;display:inline-block;font-size:13px;color:#eaeaea;white-space:nowrap;"><b>{label}</b> {value}</span>'
 
@@ -1085,19 +1088,13 @@ def _quote_chip(label, tv_symbol, q, note=""):
     return f'<a href="{url}" target="_blank"{t} style="text-decoration:none;">{inner}</a>'
 
 
-@st.cache_data(show_spinner=False, ttl=3600)  # scrip master badi CSV hai - ghante me ek baar
+@st.cache_data(show_spinner=False, ttl=3600)  # master download shared + 24h cache; fail -> exception (cache nahi)
 def _mcx_front_ids_cached() -> dict:
-    """MCX commodity -> nearest non-expired FUTCOM security id (Dhan scrip master)."""
-    try:
-        import io
-        import global_live as gl
-        names = sorted({it["mcx"] for it in gi.TOP_GLOBAL if it.get("mcx")})
-        resp = requests.get(gl.MCX_MASTER_URL, timeout=20)
-        df = pd.read_csv(io.StringIO(resp.text), low_memory=False)
-        return gl.pick_mcx_front_ids(df, names)
-    except Exception as e:
-        print(f"MCX master resolve error: {e}")
-        return {}
+    """MCX commodity -> nearest non-expired FUTCOM security id (shared Dhan scrip master)."""
+    import global_live as gl
+    from dhan_api_helper import download_dhan_master_df
+    names = sorted({it["mcx"] for it in gi.TOP_GLOBAL if it.get("mcx")})
+    return gl.pick_mcx_front_ids(download_dhan_master_df(), names)
 
 
 @st.cache_data(show_spinner=False, ttl=5)  # Dhan live quote - tape ki tarah 5s cache
@@ -1133,7 +1130,11 @@ def _mcx_quotes_for_ui() -> dict:
         cid, tok = get_dhan_creds()
     except Exception:
         return {}
-    ids = _mcx_front_ids_cached()
+    try:
+        ids = _mcx_front_ids_cached()
+    except Exception as e:
+        print(f"MCX master resolve error: {e}")
+        return {}
     if not ids:
         return {}
     return _mcx_quotes_cached(cid, tok, tuple(sorted(ids.items())))
