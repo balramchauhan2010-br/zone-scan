@@ -95,6 +95,26 @@ The rules, conditions, and trading logic are byte-for-byte the same file.
   NSE stock universe. Same unchanged zone_core.py engine runs on them; thin
   Yahoo data for some asset classes is skipped gracefully like any stock
   with too few bars.
+- **🧠 AI Trader Pulse (NEW, senior D&S trader briefing)**: a compact top strip
+  (market phase + NIFTY PCR + FII/DII + global cues + one-line AI bias) and a
+  full **Pre-Market / Post-Market briefing** section with:
+  - **Delivery %** (today vs previous day), **% of F&O futures stocks
+    increased** (breadth), **Option OI signals** (PCR, max pain,
+    support/resistance, long/short buildup), **FII/DII**, **volume vs
+    yesterday** — all from free NSE sources (bhavcopy + option chain), no API
+    key needed
+  - **4 new columns in the zone table** on both pages: `Delivery %`,
+    `ΔDeliv pp`, `Vol ×Yday`, `OI Signal`
+  - **🤖 AI short summary** (Hinglish, rule-based, works without any key;
+    Gemini key ho to ek button se aur gehri ho sakti hai) — sab data ka fusion
+    with **matlab (meaning)** and **forecast** for the next session
+  - **Top 10 BUY / Top 10 SELL** forecast — zone proximity + freshness/HQ +
+    delivery + volume + OI + PCR + FII/DII + global + news ka composite score,
+    with a Hinglish reason for every pick
+  - Market phase ke hisaab se **default section auto-select** hota hai
+    (🌅 Pre-Market Setup / 🌇 Post-Market Review)
+  - See `TRADER_PULSE_ANALYSIS.md` for the full gap analysis (kya kami thi,
+    kya add hua, trader ko har column ka kya matlab hai) and the daily workflow.
 - **Live Market Watch ticker-tape** at the top of the page: 6 small
   clickable badges (GIFT NIFTY, NIFTY 50, BANK NIFTY, USD/INR, XAUUSD,
   SPOTCRUDE) with live price + %-change, refreshed every 3 minutes -
@@ -117,6 +137,10 @@ build_market_cap_tiers.py- offline script to refresh market_cap_tiers.json
 global_instruments.py    - optional Top-Global-Instruments universe add-on + Market Watch ticker-tape list
 data_fetch.py            - chunked yfinance downloads (with request timeouts)
 scanner.py               - builds timeframe frames (incl. custom TFs) + runs zone_core + tidy table
+market_pulse.py          - NEW: AI Trader Pulse (delivery %, F&O breadth %, option OI/PCR,
+                           FII/DII, volume, global+news AI summary, Top 10, pre/post-market)
+indicators_hypothesis.py - NEW: RSI/EMA/Supertrend/MACD + rule-based Hinglish hypothesis
+                           (app.py already imported this optionally — file was missing)
 app.py                   - the Streamlit UI
 requirements.txt
 ```
@@ -163,5 +187,11 @@ python fno_universe.py --refresh
   evenly on the clock.
 - No brokerage/slippage/position-sizing is modelled - this is a zone
   scanner, not a full trading/execution system.
+- AI Trader Pulse EOD data (delivery %, OI, breadth) comes from NSE bhavcopy
+  files, which NSE publishes only **after ~18:30-19:00 IST**. Before that,
+  the pulse shows the latest available trading day (clearly date-labelled).
+  Intraday, live signals (option chain OI, live breadth) still work.
+- `python market_pulse.py` runs a fixture-based self-test (no network) against
+  the real NSE file formats; `python indicators_hypothesis.py` likewise.
 - The NSE holiday calendar baked into `candle_clock.py` is a best-effort
   list (2025-2026); update it for future years.

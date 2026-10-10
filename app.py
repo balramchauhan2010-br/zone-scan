@@ -195,6 +195,14 @@ try:
 except ImportError:
     GEMINI_MODULE_AVAILABLE = False
 
+# AI Trader Pulse (Delivery % + F&O Breadth % + Option OI/PCR + FII/DII + Volume
+# + Global + Indian News -> AI short summary + Top 10 Buy/Sell + Pre/Post Market)
+try:
+    import market_pulse as mp
+    PULSE_AVAILABLE = True
+except ImportError:
+    PULSE_AVAILABLE = False
+
 st.set_page_config(page_title="NSE F&O Supply/Demand Zone Scanner - Secure Powerful", layout="wide", page_icon="📈", initial_sidebar_state="collapsed")
 
 if "app_page" not in st.session_state:
@@ -1330,6 +1338,13 @@ def cached_macro_news():
 # Render top tape
 render_market_watch()
 
+# ---------- AI TRADER PULSE: compact top strip (phase + PCR + FII/DII + Global + AI bias) ----------
+if PULSE_AVAILABLE:
+    try:
+        mp.render_pulse_strip(tuple(tickers) if isinstance(tickers, (list, tuple)) else ())
+    except Exception as _e:
+        print(f"Pulse strip error (safe, app chalega): {_e}")
+
 # (Auto-Refresh ka call page ke neeche hai - top area me khaali space na bane)
 
 
@@ -1420,7 +1435,7 @@ _DROP_COLS = [
     "Envelope OK", "Block Candles", "Half TF", "Half OK", "Half Aligned %",
 ]
 
-_DESIRED_ORDER = ["Symbol", "Timeframe", "Direction", "Pattern", "Entry (Proximal)", "Stop Loss (Distal+Buffer)", "Target (RR set)", "Current Price", "Distance %"]
+_DESIRED_ORDER = ["Symbol", "Timeframe", "Direction", "Pattern", "Entry (Proximal)", "Stop Loss (Distal+Buffer)", "Target (RR set)", "Current Price", "Distance %", "Delivery %", "ΔDeliv pp", "Vol ×Yday", "OI Signal"]
 
 
 def _show_clean_table(display_df, symbol_title):
@@ -1447,6 +1462,10 @@ def _show_clean_table(display_df, symbol_title):
             "Target (RR set)": st.column_config.NumberColumn("Target", format="%.2f"),
             "Current Price": st.column_config.NumberColumn("LTP", format="%.2f"),
             "Distance %": st.column_config.NumberColumn("Dist %", format="%.2f%%"),
+            "Delivery %": st.column_config.NumberColumn("Deliv %", format="%.1f%%", help="Aaj ka delivery % (NSE bhavcopy)"),
+            "ΔDeliv pp": st.column_config.NumberColumn("ΔDeliv pp", format="%+.1f", help="Delivery % change vs pichhla din (pp)"),
+            "Vol ×Yday": st.column_config.NumberColumn("Vol ×", format="%.2f", help="Volume vs pichhla din (×)"),
+            "OI Signal": st.column_config.TextColumn("OI Signal", width="small", help="Futures/Options OI buildup signal"),
         },
     )
 
@@ -1632,6 +1651,13 @@ if "Main" in st.session_state.app_page:
     # ---------- Sorting/Grouping Settings (⚙️) popover se aata hai (dashboard par heading/radio nahi) ----------
     if not combined.empty:
         combined = _apply_sort_choice(combined, globals().get("sort_choice"))
+
+    # ---------- Trader Pulse columns: Delivery %, ΔDeliv pp (aaj vs pichhla din), Vol ×Yday, OI Signal ----------
+    if PULSE_AVAILABLE and not combined.empty:
+        try:
+            combined = mp.enrich_zones_with_pulse_cached(combined)
+        except Exception as _e:
+            print(f"Pulse enrich (main) error (safe): {_e}")
 
     merged_frames = {}
     for tf_frames in all_frames_store.values():
@@ -1853,6 +1879,13 @@ else:
     if not combined_v.empty:
         combined_v = _apply_sort_choice(combined_v, globals().get("sort_choice"))
 
+    # ---------- Trader Pulse columns: Delivery %, ΔDeliv pp (aaj vs pichhla din), Vol ×Yday, OI Signal ----------
+    if PULSE_AVAILABLE and not combined_v.empty:
+        try:
+            combined_v = mp.enrich_zones_with_pulse_cached(combined_v)
+        except Exception as _e:
+            print(f"Pulse enrich (validated) error (safe): {_e}")
+
     merged_frames_v = {}
     for tf_frames in all_frames_valid.values():
         merged_frames_v.update(tf_frames)
@@ -1957,6 +1990,20 @@ else:
                     df_funnel["pct"] = (100 * df_funnel["rejected"] / df_funnel["rejected"].sum()).round(1)
                     st.markdown(f"**{tf} Funnel**")
                     st.dataframe(df_funnel, width="stretch", hide_index=True)
+# ==================== AI TRADER PULSE - PRE-MARKET / POST-MARKET BRIEFING ====================
+# Senior D&S trader briefing: Delivery % (aaj vs pichhla din), % of F&O futures stocks
+# increased, Option OI signal (PCR/max pain/buildup), FII/DII, Volume+Price, Global +
+# Indian News events -> AI short summary (matlab + forecast) + Top 10 Buy / Top 10 Sell.
+if PULSE_AVAILABLE:
+    try:
+        _zones_for_pulse = combined if (combined is not None and not combined.empty) else combined_v
+        if _zones_for_pulse is None:
+            _zones_for_pulse = pd.DataFrame()
+        mp.render_ai_trader_pulse(_zones_for_pulse, tuple(all_tickers))
+    except Exception as _e:
+        print(f"Pulse section error (safe, app chalega): {_e}")
+        st.caption("⚠️ AI Trader Pulse load nahi ho paya — scanner bilkul unaffected hai.")
+
 # ==================== NEXT POWERFUL FEATURES - Auto Trading ====================
 st.markdown("---")
 st.subheader("🚀 Next Powerful Features - Secure & Optional (Bina Key Ke Bhi Fast)")
