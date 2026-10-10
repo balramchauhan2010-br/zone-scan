@@ -1459,8 +1459,13 @@ def clear_pulse_caches():
 
 # ------------------------------------------------------------- UI rendering
 
-def render_pulse_strip(tickers=()):
-    """Top tape ke neeche compact strip: phase + PCR + FII/DII + global + AI bias."""
+def render_pulse_strip(tickers=(), prefix_html: str = "") -> bool:
+    """Top tape ke neeche compact strip: phase + PCR + FII/DII + global + AI bias.
+
+    prefix_html (market tape ke chips) isi st.markdown block me render hota hai, taaki
+    tape aur pulse chips ke beech khaali gap na bane. Return True jab prefix render ho gaya.
+    """
+    rendered = False
     try:
         phase = get_market_phase()
         nifty_opt = get_option_chain_summary("NIFTY")
@@ -1492,10 +1497,15 @@ def render_pulse_strip(tickers=()):
             chips.append(_chip("FII/DII", f'<span style="color:{fii_c};">FII {fii_net:+.0f}Cr</span> <span style="color:{dii_c};">DII {dii_net:+.0f}Cr</span>', GREY))
         chips.append(_chip("🌍 Global", glob.get("label", "N/A"), GREY))
         chips.append(_chip("🧠 AI Bias", bias, bcolor))
-        st.markdown("".join(chips), unsafe_allow_html=True)
+        st.markdown(str(prefix_html or "") + "".join(chips), unsafe_allow_html=True)
+        rendered = True
         st.caption("🧠 AI Trader Pulse — neeche full Pre-Market / Post-Market briefing hai (delivery %, breadth %, option OI, FII/DII, news + Top 10 Buy/Sell) ↓ | Sources: NSE bhavcopy + option chain + FII API (free, no key)")
     except Exception as e:
         print(f"pulse strip render error (safe): {e}")
+        if prefix_html and not rendered:
+            st.markdown(prefix_html, unsafe_allow_html=True)  # tape kam se kam dikhe
+            rendered = True
+    return rendered
 
 
 def _df_table(df, height=None):

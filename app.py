@@ -1116,11 +1116,9 @@ def render_market_watch():
             gm_extra = str(global_macro_badge_html() or "")
     except Exception:
         gm_extra = ""
-    combined_tape = "".join(chips) + gm_extra
-    if combined_tape.strip():
-        st.markdown(combined_tape, unsafe_allow_html=True)
-        _src = "Dhan real-time (connected)" if is_dhan_configured() else "Yahoo (~15min delayed)"
-        st.caption(f"⚡ LTP source: {_src} | *GIFT NIFTY abhi NIFTY 50 spot proxy hai (NSE IX ka free feed available nahi) | Auto-update: Settings ⚙️ → Auto-Refresh → Live LTP")
+    # HTML lautaate hain (render caller karta hai) - Trader Pulse chips ke saath ek hi markdown block me
+    # taaki dono rows ke beech khaali gap na bane. LTP-source caption hata diya gaya hai.
+    return "".join(chips) + gm_extra
 
 
 def apply_display_filters(df):
@@ -1346,15 +1344,18 @@ def cached_macro_news():
         return pd.DataFrame()
 
 
-# Render top tape
-render_market_watch()
-
-# ---------- AI TRADER PULSE: compact top strip (phase + PCR + FII/DII + Global + AI bias) ----------
+# Render top tape + AI TRADER PULSE strip (phase + PCR + FII/DII + Global + AI bias)
+# Dono ek hi st.markdown block me (beech me khaali gap nahi).
+_tape_html = render_market_watch() or ""
+_tape_done = False
 if PULSE_AVAILABLE:
     try:
-        mp.render_pulse_strip(tuple(tickers) if isinstance(tickers, (list, tuple)) else ())
+        _tape_done = bool(mp.render_pulse_strip(
+            tuple(tickers) if isinstance(tickers, (list, tuple)) else (), prefix_html=_tape_html))
     except Exception as _e:
         print(f"Pulse strip error (safe, app chalega): {_e}")
+if _tape_html.strip() and not _tape_done:
+    st.markdown(_tape_html, unsafe_allow_html=True)
 
 # (Auto-Refresh ka call page ke neeche hai - top area me khaali space na bane)
 
