@@ -380,8 +380,7 @@ with settings_pop:
     tf_selected = sorted(tf_selected, key=scanner.tf_minutes)
 
     st.markdown("---")
-    st.subheader("🌍 Universe Type")
-    scan_mode = st.radio("Kis universe ko scan karna hai?", ["📊 NSE F&O Universe", "🌍 Top Global Instruments"], index=0, horizontal=True)
+    st.subheader("🌍 Universe: NSE F&O + Top Global Instruments")
 
     @st.cache_data(show_spinner=False, ttl=24 * 3600)
     def cached_universe():
@@ -390,24 +389,16 @@ with settings_pop:
     symbols, universe_source = cached_universe()
     all_tickers = to_yahoo_tickers(symbols)
     total_n = len(all_tickers)
-    tickers = ()
-    if scan_mode == "📊 NSE F&O Universe":
-        _size_options = sorted({n for n in [25, 50, 75, 100, 150, 200, total_n] if n <= total_n})
-        _size_labels = [f"All ({total_n})" if n == total_n else f"Top {n}" for n in _size_options]
-        _default_label = f"All ({total_n})" if f"All ({total_n})" in _size_labels else _size_labels[-1]
-        universe_label = st.select_slider("Universe (Market-Cap size)", options=_size_labels, value=_default_label)
-        _n_selected = total_n if universe_label.startswith("All") else int(universe_label.replace("Top ", ""))
-        tickers = list(mc.top_n_tickers(all_tickers, _n_selected))
-        st.caption(f"{len(tickers)} tickers selected ({universe_source})")
-        tickers = tuple(tickers)
-    else:
-        global_labels_selected = st.multiselect("🌍 Top Global Instruments", gi.labels(), default=gi.labels()[:8] if len(gi.labels()) >= 8 else gi.labels())
-        global_tickers = [gi.label_to_yahoo(lbl) for lbl in global_labels_selected]
-        global_tickers = [t for t in global_tickers if t]
-        tickers = tuple(dict.fromkeys(global_tickers))
-        if not tickers:
-            st.warning("Kam se kam 1 global instrument select karo")
-        st.caption(f"{len(tickers)} global tickers selected")
+    _size_options = sorted({n for n in [25, 50, 75, 100, 150, 200, total_n] if n <= total_n})
+    _size_labels = [f"All ({total_n})" if n == total_n else f"Top {n}" for n in _size_options]
+    _default_label = f"All ({total_n})" if f"All ({total_n})" in _size_labels else _size_labels[-1]
+    universe_label = st.select_slider("Universe (Market-Cap size)", options=_size_labels, value=_default_label)
+    _n_selected = total_n if universe_label.startswith("All") else int(universe_label.replace("Top ", ""))
+    fno_tickers = list(mc.top_n_tickers(all_tickers, _n_selected))
+    # Top Global Instruments hamesha scan me (koi selection/mode nahi). Table alag dikhta hai.
+    global_tickers = [it["yahoo"] for it in gi.GLOBAL_INSTRUMENTS]
+    tickers = tuple(dict.fromkeys(fno_tickers + global_tickers))
+    st.caption(f"NSE F&O: {len(fno_tickers)} ({universe_source}) · Top Global: {len(global_tickers)} · total scan {len(tickers)}")
 
     st.markdown("---")
     st.subheader("🔍 Filters (Common)")
@@ -1544,8 +1535,8 @@ except Exception as _e:
 #  taki chips row aur table ke beech khaali space na bane)
 
 
-def _breadth_and_fii_badges(badges):
-    if scan_mode == "📊 NSE F&O Universe":
+def _breadth_and_fii_badges(badges, include_breadth=True):
+    if include_breadth and all_tickers:  # breadth sirf NSE F&O stocks par
         try:
             breadth_tickers = tuple(all_tickers) if 'all_tickers' in globals() and len(all_tickers) > 0 else tickers
             if len(breadth_tickers) > 0:
@@ -1940,7 +1931,16 @@ def _show_clean_table(display_df, symbol_title):
     )
 
 
-def render_table_main(df, file_label, all_frames=None):
+def _split_by_universe(df):
+    """Ek hi scan ke result ko (NSE F&O rows, Top Global rows) me baanto."""
+    if df is None or df.empty or "Ticker" not in df.columns:
+        return df, (df.iloc[0:0] if df is not None else pd.DataFrame())
+    gset = {it["yahoo"] for it in gi.GLOBAL_INSTRUMENTS}
+    is_g = df["Ticker"].astype(str).isin(gset)
+    return df[~is_g].reset_index(drop=True), df[is_g].reset_index(drop=True)
+
+
+def render_table_main(df, file_label, all_frames=None, is_global=False):
     df = apply_display_filters(df)
     badges = []
     if not df.empty:
@@ -1948,7 +1948,7 @@ def render_table_main(df, file_label, all_frames=None):
         badges.append(_badge("Demand", str(int(df["Direction"].str.contains("DEMAND").sum())), "#16c784"))
         badges.append(_badge("Supply", str(int(df["Direction"].str.contains("SUPPLY").sum())), "#ea3943"))
         badges.append(_badge("HQ (Rule3)", str(int(df["HQ Zone (Rule3 Boring-Colour)"].sum())) if "HQ Zone (Rule3 Boring-Colour)" in df.columns else "0", "#f0b90b"))
-    _breadth_and_fii_badges(badges)
+    _breadth_and_fii_badges(badges, include_breadth=not is_global)
 
     try:
         nifty_df = cached_nifty_daily(cc.last_closed_bucket("Daily"))
@@ -1982,7 +1982,7 @@ def render_table_main(df, file_label, all_frames=None):
     return display_df
 
 
-def render_table_validated(df, file_label, all_frames=None):
+def render_table_validated(df, file_label, all_frames=None, is_global=False):
     df = apply_display_filters(df)
     if v_show_only_valid and "Valid?" in df.columns:
         df = df[df["Valid?"] == True]
@@ -2009,7 +2009,7 @@ def render_table_validated(df, file_label, all_frames=None):
             badges.append(_badge("Half-TF OK", str(int(df["Half OK"].sum())), "#8a2be2"))
         if "Block Candles" in df.columns:
             badges.append(_badge("2C/3C blocks", str(int((df["Block Candles"] > 1).sum())), "#f0b90b"))
-    _breadth_and_fii_badges(badges)
+    _breadth_and_fii_badges(badges, include_breadth=not is_global)
     if badges:
         st.markdown("".join(badges), unsafe_allow_html=True)
     if df.empty:
@@ -2035,7 +2035,7 @@ def render_table_validated(df, file_label, all_frames=None):
 
 # Main branching
 if not tickers:
-    st.error("❌ Koi ticker select nahi hai. Settings (⚙️) me jaake NSE Universe ya Global Instruments select karo.")
+    st.error("❌ Koi ticker nahi mila. NSE F&O universe load nahi hua.")
     st.stop()
 
 needed_bases = {scanner.base_dataset_for_tf(tf) for tf in tf_selected}
@@ -2052,7 +2052,7 @@ if "Main" in st.session_state.app_page:
     if "main_scan_combined" not in st.session_state:
         st.session_state.main_scan_combined = None
 
-    fast_tickers = tickers[:50] if len(tickers) > 50 else tickers
+    fast_tickers = tuple(dict.fromkeys(tuple(fno_tickers[:50]) + tuple(global_tickers)))
 
     # Scan trigger popover ke buttons se aata hai (main page par koi button/status box nahi)
     _trig = st.session_state.pop("main_scan_trigger", None)
@@ -2129,7 +2129,12 @@ if "Main" in st.session_state.app_page:
     merged_frames = {}
     for tf_frames in all_frames_store.values():
         merged_frames.update(tf_frames)
-    display_main = render_table_main(combined, "all_selected_timeframes" if len(tf_selected) > 1 else tf_selected[0], all_frames=merged_frames)
+    combined_fno, combined_glob = _split_by_universe(combined)
+    _mlabel = "all_selected_timeframes" if len(tf_selected) > 1 else tf_selected[0]
+    st.subheader("📊 NSE F&O zones")
+    display_main = render_table_main(combined_fno, _mlabel, all_frames=merged_frames)
+    st.subheader("🌍 Top Global zones")
+    render_table_main(combined_glob, _mlabel + "_global", all_frames=merged_frames, is_global=True)
 
     # ---------- DETAILED ZONE ANALYSIS WITH SHORT LINKS ----------
     if not display_main.empty:
@@ -2280,7 +2285,7 @@ else:
     if "validated_scan_results" not in st.session_state:
         st.session_state.validated_scan_results = None
 
-    fast_tickers_v = tickers[:50] if len(tickers) > 50 else tickers
+    fast_tickers_v = tuple(dict.fromkeys(tuple(fno_tickers[:50]) + tuple(global_tickers)))
 
     results_valid = {}
     funnels = {}
@@ -2364,7 +2369,12 @@ else:
     merged_frames_v = {}
     for tf_frames in all_frames_valid.values():
         merged_frames_v.update(tf_frames)
-    display_valid = render_table_validated(combined_v, "all_validated" if len(tf_selected) > 1 else (tf_selected[0] if tf_selected else "validated"), all_frames=merged_frames_v)
+    combined_v_fno, combined_v_glob = _split_by_universe(combined_v)
+    _vlabel = "all_validated" if len(tf_selected) > 1 else (tf_selected[0] if tf_selected else "validated")
+    st.subheader("📊 NSE F&O validated zones")
+    display_valid = render_table_validated(combined_v_fno, _vlabel, all_frames=merged_frames_v)
+    st.subheader("🌍 Top Global validated zones")
+    render_table_validated(combined_v_glob, _vlabel + "_global", all_frames=merged_frames_v, is_global=True)
 
     # Detailed analysis for validated
     if not display_valid.empty:
