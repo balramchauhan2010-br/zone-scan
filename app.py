@@ -135,7 +135,7 @@ except ImportError:
         return "Global mixed"
 
 try:
-    from sector_map import get_sector, get_sector_index, get_nse_links, get_sector_news_link
+    from sector_map import get_sector, get_sector_index, get_nse_links, get_sector_news_link, get_macro_drivers_for_sector
     SECTOR_AVAILABLE = True
 except ImportError:
     SECTOR_AVAILABLE = False
@@ -157,6 +157,9 @@ except ImportError:
 
     def get_sector_news_link(s):
         return {"google_news": f"https://news.google.com/search?q={s}+NSE"}
+
+    def get_macro_drivers_for_sector(s):
+        return []
 
 try:
     from indicators_hypothesis import calculate_indicators, generate_hypothesis_rule_based, get_hypothesis_short_link
@@ -1579,6 +1582,115 @@ def _news_lines_html(news_df, max_show=2):
 
 _NEWS_COLS = ["🔗 News Link", "📰 Powerful News", "📰 News", "⚡ Powerful", "⚡ News Desc", "🤖 AI Link"]
 
+
+@st.cache_data(show_spinner=False, ttl=600)
+def cached_macro_quotes():
+    """Sector-drivers ke extra live quotes (DXY, US10Y, S&P, China, NatGas) - 10 min cache."""
+    try:
+        extra = ("DX-Y.NYB", "^TNX", "^GSPC", "000001.SS", "NG=F")
+        from data_fetch import fetch_market_watch_quotes
+        return fetch_market_watch_quotes(list(extra)) or {}
+    except Exception:
+        return {}
+
+
+def _oi_why_full(sel_ticker):
+    """Selected stock ka full OI-reason (drivers ke saath) ya None."""
+    if not PULSE_AVAILABLE:
+        return None
+    try:
+        _clean = str(sel_ticker).replace(".NS", "").upper().strip()
+        p = (mp.get_pulse_map((str(sel_ticker),)) or {}).get(_clean)
+        return mp.oi_why(p) if p else None
+    except Exception:
+        return None
+
+
+def _oi_why_short_map(tickers_tuple):
+    """Table column ke liye {ticker: short OI-reason}."""
+    if not PULSE_AVAILABLE:
+        return {}
+    try:
+        pm = mp.get_pulse_map(tickers_tuple) or {}
+        return {t: mp.oi_why(p, short=True) for t, p in pm.items()}
+    except Exception:
+        return {}
+
+
+_COUNTRY_FLAG = {"India": "🇮🇳", "US": "🇺🇸", "Euro Zone": "🇪🇺", "EU": "🇪🇺", "UK": "🇬🇧",
+                 "Japan": "🇯🇵", "China": "🇨🇳", "Germany": "🇩🇪", "Canada": "🇨🇦", "Australia": "🇦🇺"}
+
+
+def _fresh_macro_events_html(max_show=3):
+    """Agle/पिछले 2 din ke high-impact global events (ForexFactory calendar)."""
+    try:
+        df = cached_macro_news()
+        if df is None or df.empty or "event" not in df.columns:
+            return []
+        now = datetime.now()
+        rows = []
+        for _, r in df.head(40).iterrows():
+            try:
+                d = pd.to_datetime(r.get("date"), errors="coerce", utc=True)
+                if pd.isna(d):
+                    continue
+                d_local = d.tz_convert("Asia/Kolkata") if d.tzinfo else d
+                if abs((d_local.tz_localize(None) - now).total_seconds()) > 2 * 86400:
+                    continue
+                imp = str(r.get("impact") or "")
+                if imp.lower() not in ("high", "medium"):
+                    continue
+                c = str(r.get("country") or "").strip()
+                flag = _COUNTRY_FLAG.get(c, "🌍")
+                dtxt = d_local.strftime("%d-%b %H:%M")
+                imp_c = "#ea3943" if imp.lower() == "high" else "#f0b90b"
+                rows.append((0 if imp.lower() == "high" else 1,
+                             f"{flag} <b>{r.get('event')}</b> — <span style='color:{imp_c};'>{imp} impact</span> • {dtxt} IST"))
+            except Exception:
+                continue
+        rows.sort()
+        return [t for _, t in rows[:max_show]]
+    except Exception:
+        return []
+
+
+def _render_affected_by_panel(sector, news_df, max_news=2):
+    """🌍🇮🇳 इस स्टॉक को प्रभावित करने वाले देश-विदेश के factors:
+    sector-specific macro drivers (live values के साथ) + high-impact events + stock news."""
+    try:
+        drivers = get_macro_drivers_for_sector(sector) if SECTOR_AVAILABLE else []
+    except Exception:
+        drivers = []
+    try:
+        quotes = {**(cached_macro_quotes() or {}), **(cached_market_watch() or {})}
+    except Exception:
+        quotes = {}
+
+    chips, lines = [], []
+    for d in (drivers or [])[:3]:
+        name = d.get("name", "")
+        why = d.get("why", "")
+        val = ""
+        yk = d.get("yahoo")
+        if yk:
+            q = quotes.get(yk)
+            if q:
+                try:
+                    val = f": <b style='color:{'#16c784' if q[1] >= 0 else '#ea3943'};'>{q[0]:,.2f} ({q[1]:+.2f}%)</b>"
+                except Exception:
+                    val = ""
+        lines.append(f"<div style='margin:4px 0;'><b style='color:#f0b90b;'>{name}</b>{val}<br>"
+                     f"<small style='color:#bbb;'>क्यों: {why}</small></div>")
+    ev = _fresh_macro_events_html()
+    if ev:
+        lines.append("<div style='margin-top:6px;'><b style='color:#00bfff;'>🗓️ अगले 2 दिन के बड़े events:</b><br><small>" + "<br>".join(ev) + "</small></div>")
+    nl = _news_lines_html(news_df, max_show=max_news)
+    if nl:
+        lines.append("<div style='margin-top:6px;'><b style='color:#00bfff;'>📰 इस स्टॉक की fresh खबरें:</b><br><small>" + "<br>".join(nl) + "</small></div>")
+    if not lines:
+        return "<small style='color:#888;'>कोई relevant driver/event data उपलब्ध नहीं</small>"
+    return "<div style='line-height:1.55;'>" + "".join(lines) + "</div>"
+
 _DROP_COLS = [
     "Ticker", "Risk:Reward", "Distance from Entry", "Price Position",
     "HQ Zone (Rule3 Boring-Colour)", "HQ Zone", "White Area OK (Rule4)", "White Area OK",
@@ -1589,7 +1701,7 @@ _DROP_COLS = [
     "Envelope OK", "Block Candles", "Half TF", "Half OK", "Half Aligned %",
 ]
 
-_DESIRED_ORDER = ["Symbol", "Timeframe", "Direction", "Pattern", "Entry (Proximal)", "Stop Loss (Distal+Buffer)", "Target (RR set)", "Current Price", "Distance %", "📊 Ind", "Delivery %", "ΔDeliv pp", "Vol ×Yday", "OI Signal"]
+_DESIRED_ORDER = ["Symbol", "Timeframe", "Direction", "Pattern", "Entry (Proximal)", "Stop Loss (Distal+Buffer)", "Target (RR set)", "Current Price", "Distance %", "📊 Ind", "Delivery %", "ΔDeliv pp", "Vol ×Yday", "OI Signal", "🎯 OI क्यों"]
 
 
 def _show_clean_table(display_df, symbol_title):
@@ -1599,6 +1711,15 @@ def _show_clean_table(display_df, symbol_title):
             _tk = tuple(sorted(set(display_df["Ticker"].astype(str))))
             _imap = compact_indicators_for_tickers(_tk, cc.last_closed_bucket("Daily"))
             display_df["📊 Ind"] = display_df["Ticker"].astype(str).map(lambda t: _imap.get(t, "—"))
+    except Exception:
+        pass
+    # OI सिग्नल के पीछे का कारण (हर stock का अपना) - सिर्फ label नहीं
+    try:
+        if PULSE_AVAILABLE and "OI Signal" in display_df.columns and "Ticker" in display_df.columns and not display_df.empty:
+            _tk = tuple(sorted(set(display_df["Ticker"].astype(str))))
+            _omap = _oi_why_short_map(_tk)
+            display_df["🎯 OI क्यों"] = display_df["Ticker"].astype(str).map(
+                lambda t: _omap.get(str(t).replace(".NS", "").upper().strip(), "—"))
     except Exception:
         pass
     for col in _NEWS_COLS:
@@ -1630,6 +1751,7 @@ def _show_clean_table(display_df, symbol_title):
             "ΔDeliv pp": st.column_config.NumberColumn("ΔDeliv pp", format="%+.1f", help="Delivery % change vs pichhla din (pp)"),
             "Vol ×Yday": st.column_config.NumberColumn("Vol ×", format="%.2f", help="Volume vs pichhla din (×)"),
             "OI Signal": st.column_config.TextColumn("OI Signal", width="small", help="Futures/Options OI buildup signal"),
+            "🎯 OI क्यों": st.column_config.TextColumn("OI क्यों", width="small", help="OI सिग्नल के पीछे का कारण: Price/OI change के numbers + trader-interpretation (सिर्फ 'Short Covering' लिखना काफी नहीं)"),
         },
     )
 
@@ -1936,6 +2058,14 @@ if "Main" in st.session_state.app_page:
                     for _, r in corp_df.head(2).iterrows():
                         st.caption(f"- {r.get('purpose', '')} (ex {r.get('ex_date', '')})")
 
+            # ---------- OI का कारण + देश-विदेश के factors (trader context, full-width) ----------
+            _why = _oi_why_full(sel_ticker)
+            if _why:
+                st.markdown("**🎯 OI Signal के पीछे का कारण (drivers + क्या करना)**")
+                st.info(_why)
+            st.markdown("**🌍🇮🇳 देश-विदेश का क्या असर इस स्टॉक पर पड़ता है**")
+            st.markdown(_render_affected_by_panel(sector, news_df), unsafe_allow_html=True)
+
             with st.expander("🌐 Global Macro Economic News (Today)", expanded=False):
                 macro_df = cached_macro_news()
                 if not macro_df.empty:
@@ -2139,6 +2269,14 @@ else:
                 if _nlines:
                     st.write("**Recent News:**")
                     st.markdown("<br>".join(_nlines), unsafe_allow_html=True)
+
+            # ---------- OI का कारण + देश-विदेश के factors (validated page) ----------
+            _why = _oi_why_full(sel_ticker)
+            if _why:
+                st.markdown("**🎯 OI Signal के पीछे का कारण (drivers + क्या करना)**")
+                st.info(_why)
+            st.markdown("**🌍🇮🇳 देश-विदेश का क्या असर इस स्टॉक पर पड़ता है**")
+            st.markdown(_render_affected_by_panel(sector, news_df), unsafe_allow_html=True)
 
             if is_gemini_configured():
                 if st.button("🤖 Gemini se Top 10 Validated Zones ka AI Analysis", key="gemini_validated"):

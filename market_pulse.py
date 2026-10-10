@@ -347,6 +347,57 @@ def _oi_signal(chg_pct, fut_oi_chg_pct, ce_chg, pe_chg):
     return "Neutral ⚪", "neutral"
 
 
+def oi_why(p: Optional[dict] = None, short: bool = False) -> str:
+    """OI सिग्नल के पीछे का कारण - सिर्फ label नहीं, drivers (price/OI/delivery/PCR
+    के numbers) + trader-interpretation के साथ. short=True -> table column के लिए compact."""
+    if not p:
+        return "—" if short else "OI/delivery data N/A (bhavcopy pending)"
+    en = str(p.get("oi_signal_en") or "neutral")
+    chg = p.get("chg_pct")
+    oi = p.get("fut_oi_chg_pct")
+    pcr = p.get("pcr")
+    d1p = p.get("deliv_pct")
+    dchg = p.get("deliv_chg_pp")
+    pr = f"{chg:+.1f}%" if chg is not None else "—"
+    orr = f"{oi:+.1f}%" if oi is not None else "—"
+    pc = f"PCR {pcr:.2f}" if pcr else "PCR —"
+    dv = f"{d1p:.0f}%" if d1p is not None else "—"
+
+    if en == "long_buildup":
+        if short:
+            return f"नया लॉन्ग पैसा (P {pr}, OI {orr})"
+        return (f"नया लॉन्ग पैसा: price {pr} + OI {orr} दोनों बढ़े = traders positions बना कर बैठे हैं, यही असली ताकत है. "
+                f"Delivery {dv} ({'होल्डिंग पर भरोसा बढ़ा' if (dchg or 0) > 0 else 'delivery में कमी - profit-booking आ सकती है'}). {pc}. "
+                f"⚠️ OI ज़्यादा बढ़ा है तो leveraged positions की उलट-गिनती भी तेज़ हो सकती है.")
+    if en == "short_covering":
+        if short:
+            return f"शॉर्ट कवरिंग = कमज़ोर तेज़ी (P {pr}, OI {orr})"
+        return (f"कमज़ोर तेज़ी: price {pr} बढ़ा पर OI {orr} घटा = नई खरीद नहीं, shorts बस कवर कर रहे हैं. "
+                f"ऐसी रैली resistance पर अक्सर थम जाती है (shorts फिर बनते हैं). Delivery {dv}. {pc}. "
+                f"👉 Entry से पहले देखें कि delivery + volume भी साथ बढ़ रहा है या नहीं.")
+    if en == "short_buildup":
+        if short:
+            return f"नए shorts बन रहे (P {pr}, OI {orr})"
+        return (f"नए shorts: price {pr} + OI {orr} बढ़ा = sellers aggressive, positions बना कर गिरावट का इंतज़ार. "
+                f"Support टूटा तो short-add से और गिरेगा. Delivery {dv} (कम delivery = आज के खरीदार भी डे-ट्रेडर). {pc}.")
+    if en == "long_unwinding":
+        if short:
+            return f"लॉन्ग निकासी (P {pr}, OI {orr})"
+        return (f"लॉन्ग निकासी: price {pr} + OI {orr} घटा = longs बेच कर निकल रहे हैं (असली बिकवाली). "
+                f"OI का घटना = forced exits खत्म होने की तरफ इशारा - selling की गति धीमी पड़ सकती है. Delivery {dv}. {pc}.")
+    if en == "put_writing":
+        if short:
+            return f"Put writing = support (P {pr})"
+        return f"Put writing: price लगभग flat ({pr}) पर put OI बढ़ा = premium sellers को support दिख रहा है (बुलिश दांव). {pc}."
+    if en == "call_writing":
+        if short:
+            return f"Call writing = resistance (P {pr})"
+        return f"Call writing: price लगभग flat ({pr}) पर call OI बढ़ा = premium sellers ऊपर resistance बना रहे हैं (बेयरिश दांव). {pc}."
+    if short:
+        return "साफ़ सिग्नल नहीं"
+    return f"साफ़ सिग्नल नहीं: price {pr}, OI {orr} दोनों flat = न नया पैसा, न कवरिंग. ऐसे zones में OI confirmation का इंतज़ार करें. {pc}."
+
+
 # Legacy FO bhavcopy INSTRUMENT values + UDiff (>= Jul 2024) FinInstrmTp values — dono
 _FUT_INSTRUMENTS = {"FUTIDX", "FUTSTK", "FUTIVX", "FUTCOM", "FUTIRC", "FUTIRT", "FUTBLK",
                     "IDF", "STF", "FUT"}
