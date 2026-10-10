@@ -200,11 +200,18 @@ def verdict(sig_en: str, live_chg: Optional[float], ratio: Optional[float], zone
 
 
 def oi_table(fo_map: Dict[str, dict], ratio_df: pd.DataFrame, zones: Dict[str, str],
-             fno: Iterable[str], direction: str = "inc", n: int = TOP_N) -> pd.DataFrame:
-    """Top N futures OI increase (direction='inc') ya decrease ('dec') + live context."""
-    cols = ["Symbol", "Fut OI Δ %", "Fut OI Δ (contracts)", "Fut OI (lakh)", "EOD Price %",
-            "OI Signal (EOD)", "Live Price %", "Vol x (time-adj)", "Zone", "Read"]
+             fno: Iterable[str], direction: str = "inc", live_oi: Optional[Dict[str, dict]] = None,
+             n: int = TOP_N) -> pd.DataFrame:
+    """Top N futures OI increase ('inc') ya decrease ('dec') + live context.
+
+    OI source per row:
+      Live (Dhan / NSE) - live OI vs pichhle session ka close OI (EOD fut_oi); price + signal live
+      EOD               - EOD bhavcopy ka OI change (live nahi mila ya bhavcopy aaj ka hi hai)
+    """
+    cols = ["Symbol", "Fut OI Δ %", "Fut OI Δ (contracts)", "Fut OI (lakh)", "Price %",
+            "OI Signal", "OI Source", "Vol x (time-adj)", "Zone", "Read"]
     fno_set = set(fno)
+    live_oi = live_oi or {}
     live = {}
     if ratio_df is not None and not ratio_df.empty:
         live = {r["Symbol"]: r for _, r in ratio_df.iterrows()}
@@ -212,33 +219,54 @@ def oi_table(fo_map: Dict[str, dict], ratio_df: pd.DataFrame, zones: Dict[str, s
     for sym, f in (fo_map or {}).items():
         if sym not in fno_set:
             continue
-        pct = f.get("fut_oi_chg_pct")
-        if pct is None or (isinstance(pct, float) and np.isnan(pct)):
-            continue
-        oi_now = f.get("fut_oi")
+        base_oi = f.get("fut_oi")
+        lr = live.get(sym)
+        live_chg = float(lr["Chg %"]) if lr is not None and pd.notna(lr["Chg %"]) else None
+        ratio = float(lr["Vol x (time-adj)"]) if lr is not None and pd.notna(lr["Vol x (time-adj)"]) else None
+        zt = zones.get(sym, "")
+
+        lo = live_oi.get(sym)
+        use_live = False
+        if lo and base_oi and base_oi > 0 and lo.get("oi"):
+            ratio_oi = lo["oi"] / base_oi
+            # sanity: expiry mismatch (near-expiry rollover) par OI 5x/0.2x se bahar hota hai -> EOD
+            use_live = 0.2 <= ratio_oi <= 5.0
+
+        if use_live:
+            oi_now = float(lo["oi"])
+            pct = (oi_now - base_oi) / base_oi * 100.0
+            chg_contracts = oi_now - base_oi
+            price = live_chg if live_chg is not None else f.get("chg_pct")
+            sig_label, sig_en = mp._oi_signal(price, pct, None, None)
+            src = lo.get("source", "Live")
+        else:
+            pct = f.get("fut_oi_chg_pct")
+            if pct is None or (isinstance(pct, float) and np.isnan(pct)):
+                continue
+            oi_now = base_oi
+            chg_contracts = f.get("fut_oi_chg")
+            price = f.get("chg_pct")
+            sig_label = f.get("oi_signal", "—")
+            sig_en = f.get("oi_signal_en", "neutral")
+            src = "EOD"
+
         if oi_now is None or oi_now < MIN_FUT_OI:
             continue  # bahut patla OI: % move meaningless
         if direction == "inc" and pct <= 0:
             continue
         if direction == "dec" and pct >= 0:
             continue
-        lr = live.get(sym)
-        live_chg = float(lr["Chg %"]) if lr is not None and pd.notna(lr["Chg %"]) else None
-        ratio = float(lr["Vol x (time-adj)"]) if lr is not None and pd.notna(lr["Vol x (time-adj)"]) else None
-        zt = zones.get(sym, "")
-        sig = f.get("oi_signal_en", "neutral")
-        oi = f.get("fut_oi")
         rows.append({
             "Symbol": sym,
             "Fut OI Δ %": round(float(pct), 2),
-            "Fut OI Δ (contracts)": f.get("fut_oi_chg"),
-            "Fut OI (lakh)": round(float(oi) / 1e5, 2) if oi else None,
-            "EOD Price %": round(float(f["chg_pct"]), 2) if f.get("chg_pct") is not None else None,
-            "OI Signal (EOD)": f.get("oi_signal", "—"),
-            "Live Price %": round(live_chg, 2) if live_chg is not None else None,
+            "Fut OI Δ (contracts)": round(float(chg_contracts)) if chg_contracts is not None else None,
+            "Fut OI (lakh)": round(float(oi_now) / 1e5, 2),
+            "Price %": round(float(price), 2) if price is not None else None,
+            "OI Signal": sig_label,
+            "OI Source": src,
             "Vol x (time-adj)": round(ratio, 2) if ratio is not None else None,
             "Zone": zt or "—",
-            "Read": verdict(sig, live_chg, ratio, zt),
+            "Read": verdict(sig_en, live_chg, ratio, zt),
         })
     df = pd.DataFrame(rows, columns=cols)
     if df.empty:
@@ -247,11 +275,27 @@ def oi_table(fo_map: Dict[str, dict], ratio_df: pd.DataFrame, zones: Dict[str, s
     return df.reset_index(drop=True)
 
 
+def oi_priority(fo_map: Dict[str, dict], zones: Dict[str, str], fno: Iterable[str],
+                n_movers: int = 25) -> Tuple[str, ...]:
+    """Live OI kis stocks ke liye pehle (NSE fallback ke liye bhi): zone wale + EOD OI me sabse bade movers."""
+    fno_set = set(fno)
+    movers = []
+    for sym, f in (fo_map or {}).items():
+        pct = f.get("fut_oi_chg_pct")
+        oi = f.get("fut_oi")
+        if sym in fno_set and pct is not None and oi and oi >= MIN_FUT_OI:
+            movers.append((abs(pct), sym))
+    movers.sort(reverse=True)
+    out = [s for s in zones if s in fno_set]
+    out += [s for _, s in movers[:n_movers] if s not in out]
+    return tuple(dict.fromkeys(out))
+
+
 def market_mood(br: dict, oi_inc: pd.DataFrame, oi_dec: pd.DataFrame, n_spikes: int) -> Tuple[str, str]:
     """F&O overall mood: breadth + OI buildup ka balance + spikes."""
     b = br.get("mood", "—")
-    lb = int((oi_inc["OI Signal (EOD)"] == "Long Buildup 🟢").sum()) if not oi_inc.empty else 0
-    sb = int((oi_dec["OI Signal (EOD)"] == "Short Buildup 🔴").sum()) if not oi_dec.empty else 0
+    lb = int((oi_inc["OI Signal"] == "Long Buildup 🟢").sum()) if not oi_inc.empty else 0
+    sb = int((oi_dec["OI Signal"] == "Short Buildup 🔴").sum()) if not oi_dec.empty else 0
     if b.startswith("Bullish") and lb >= sb:
         mood = "Bullish 🟢"
     elif b.startswith("Bearish") and sb >= lb:
@@ -346,6 +390,13 @@ def fetch_corp(syms: tuple) -> dict:
     return nmc.get_client().corporate_actions_many(syms)
 
 
+@st.cache_data(show_spinner=False, ttl=30)
+def fetch_live_oi(fno: tuple, priority: tuple):
+    """Live futures OI (Dhan > NSE fallback). Returns ({SYM: {...}}, status_text)."""
+    import live_oi as lo
+    return lo.get_live_fut_oi(fno, priority)
+
+
 def _fo_eod() -> dict:
     """EOD F&O bhavcopy (existing pipeline): {'map': {SYM: {...fut_oi...}}, 'date': iso}."""
     try:
@@ -378,7 +429,7 @@ def _render(zones_df, fno_symbols) -> None:
     st.markdown("---")
     st.header("📡 NSE MCP — F&O Stocks: Live Market Context")
     st.caption("Sirf NSE F&O stocks (index hata ke). Live data NSE MCP se (1-3 min delay). "
-               "OI = futures OI, EOD bhavcopy se (NSE MCP me OI tool nahi hai). "
+               "OI = futures OI: live (Dhan / NSE fallback) jahan mila, warna EOD bhavcopy. "
                "Ye context hai, trading signal nahi - NSE ki shart: educational use.")
 
     client = nmc.get_client()
@@ -398,7 +449,7 @@ def _render(zones_df, fno_symbols) -> None:
         snap = fetch_live(fno)
     df = live_frame(snap, fno)
     st.caption(f"{phase['label']} · {len(df)}/{len(fno)} F&O stocks ka live data mila · "
-               f"EOD OI date: {eod_date} · Volume baseline: 20-din average (6h cache)")
+               f"OI baseline (EOD): {eod_date} · Volume baseline: 20-din average (6h cache)")
 
     if df.empty:
         st.warning("NSE MCP se F&O live data nahi aaya. Ye NSE endpoint ki reachability ya tool "
@@ -415,8 +466,24 @@ def _render(zones_df, fno_symbols) -> None:
     br = breadth(df)
     zones = zone_map(zones_df)
     sp = spikes(ratio_df)
-    oi_inc = oi_table(eod.get("map") or {}, ratio_df, zones, fno, "inc")
-    oi_dec = oi_table(eod.get("map") or {}, ratio_df, zones, fno, "dec")
+
+    # Live futures OI: sirf tab jab EOD bhavcopy aaj ka NAHI hai (warna baseline hi aaj ka close ban jaata)
+    fo_map = eod.get("map") or {}
+    today_iso = cc.now_ist().date().isoformat()
+    live_oi, oi_status = {}, "live OI skip"
+    if not fo_map:
+        oi_status = "EOD OI nahi mila, isliye live OI ka baseline nahi"
+    elif eod_date == today_iso:
+        oi_status = "bhavcopy aaj ka close OI hai (live ki zaroorat nahi)"
+    else:
+        prio = oi_priority(fo_map, zones, fno)
+        with st.spinner("Live futures OI (Dhan / NSE)..."):
+            live_oi, oi_status = fetch_live_oi(fno, prio)
+    oi_inc = oi_table(fo_map, ratio_df, zones, fno, "inc", live_oi)
+    oi_dec = oi_table(fo_map, ratio_df, zones, fno, "dec", live_oi)
+    n_live = sum(1 for r in oi_inc.get("OI Source", []) if r == "Dhan" or r == "NSE") + \
+             sum(1 for r in oi_dec.get("OI Source", []) if r == "Dhan" or r == "NSE")
+    st.caption(f"Live OI: {oi_status} · top-10 tables me live rows: {n_live}")
     mood, mood_reason = market_mood(br, oi_inc, oi_dec, len(sp))
 
     m1, m2, m3, m4 = st.columns(4)
@@ -450,14 +517,15 @@ def _render(zones_df, fno_symbols) -> None:
         _fmt_table(sp, "Abhi koi time-adjusted volume spike nahi (ya pre-market hai).")
 
     with t3:
-        st.caption(f"Futures OI sabse zyada badha (EOD {eod_date}). 'Read' me EOD OI signal + LIVE price + "
-                   "LIVE volume spike + zone ek saath judte hain.")
-        _fmt_table(oi_inc, "EOD F&O bhavcopy abhi available nahi (sham ~18:30 IST ke baad aata hai).")
+        st.caption(f"Futures OI sabse zyada badha (baseline: pichhla close, EOD {eod_date}). "
+                   "'OI Source' batata hai ki number Live (Dhan/NSE) hai ya EOD. 'Read' me OI + live price + "
+                   "live volume spike + zone ek saath judte hain.")
+        _fmt_table(oi_inc, "F&O OI data abhi available nahi (EOD bhavcopy sham ~18:30 IST ke baad aata hai).")
 
     with t4:
-        st.caption(f"Futures OI sabse zyada ghata (EOD {eod_date}). Short covering / long unwinding ka "
-                   "matlab 'Read' column me.")
-        _fmt_table(oi_dec, "EOD F&O bhavcopy abhi available nahi.")
+        st.caption(f"Futures OI sabse zyada ghata (baseline: pichhla close, EOD {eod_date}). Short covering / "
+                   "long unwinding ka matlab 'Read' column me.")
+        _fmt_table(oi_dec, "F&O OI data abhi available nahi.")
 
     with t5:
         gi = fetch_index_groups("gain")

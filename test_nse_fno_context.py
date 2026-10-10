@@ -142,9 +142,9 @@ def test_oi_top10_increase_and_decrease_with_live_context():
 
 
 def test_market_mood_balances_breadth_and_oi():
-    long3 = pd.DataFrame({"OI Signal (EOD)": ["Long Buildup 🟢"] * 3})   # OI-increase table
-    short3 = pd.DataFrame({"OI Signal (EOD)": ["Short Buildup 🔴"] * 3})  # OI-decrease table
-    one_long = pd.DataFrame({"OI Signal (EOD)": ["Long Buildup 🟢"]})
+    long3 = pd.DataFrame({"OI Signal": ["Long Buildup 🟢"] * 3})   # OI-increase table
+    short3 = pd.DataFrame({"OI Signal": ["Short Buildup 🔴"] * 3})  # OI-decrease table
+    one_long = pd.DataFrame({"OI Signal": ["Long Buildup 🟢"]})
     mood, reason = nfc.market_mood({"mood": "Bullish 🟢"}, long3, short3, 4)
     assert mood == "Bullish 🟢"
     assert "long build-up 3 vs short build-up 3" in reason

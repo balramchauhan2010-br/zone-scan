@@ -227,13 +227,13 @@ Ek naya section (app me AI Trader Pulse ke neeche) sirf **NSE F&O stocks** ke li
 | Breadth + mood (top cards) | NSE MCP live snapshot (F&O only) | F&O me kitne stocks up/down, average move, mood |
 | 📈 Top 10 Gainers / Losers | NSE MCP live | F&O stocks ka live % move |
 | ⚡ Volume Spikes | NSE MCP live volume + 20-din average (bhavcopy server, 6h cache) | Time-adjusted volume ratio (session ke hisaab se) |
-| 🔼 / 🔽 Top 10 OI Increase / Decrease | EOD F&O bhavcopy (existing pipeline) + live price + live spike + zone | Futures OI change, EOD OI signal, live context, 'Read' verdict |
+| 🔼 / 🔽 Top 10 OI Increase / Decrease | **Live futures OI** (Dhan → NSE fallback → EOD) + live price + live spike + zone | Futures OI change vs pichhla close, `OI Source` (Dhan / NSE / EOD), OI signal, 'Read' verdict |
 | 🧭 Index Movers (F&O) | NSE MCP `cm_get_live_gainers/losers` (index-wise) filtered to F&O | NIFTY / BANK NIFTY etc. ke andar F&O movers |
 | 🏢 Corporate Actions | NSE MCP `get_corporate_actions` | Zone/OI stocks ke liye ±14 din me ex-date, bonus/split warning |
 
 Important limits:
-- **NSE MCP me OI / derivatives tool nahi hai.** Isliye OI EOD (previous session) ka hai; intraday OI nahi.
-  Live price + volume se ise tazaa karte hain, lekin ye intraday OI nahi hai.
+- **NSE MCP me OI / derivatives tool nahi hai.** Isliye live OI `live_oi.py` se aata hai (neeche dekhein).
+  Jab live OI na mile, to panel EOD bhavcopy OI dikhata hai aur `OI Source` column me `EOD` likhta hai.
 - Time-adjusted volume ek approximation hai (volume din me U-shape chalta hai; subah spike zyada dikhta hai).
 - Pre-market me volume spike nahi dikhta. Post-market/holiday me poore din ka volume dikhta hai.
 - Pehli baar 20-din average volume ke liye ~210 calls chalti hain (parallel), phir 6 ghante cache.
@@ -254,10 +254,32 @@ It prints the tool list, the schema of each tool, and the raw JSON of
 `lastPrice`/`last_price`/`ltp` and `pChange`/`change_pct` anywhere in the JSON. If your
 output uses other names, add them to `_LTP_KEYS` / `_CHG_PCT_KEYS` in `nse_mcp_client.py`.
 
-Tests (run without internet, against a local mock MCP server):
+#### Live futures OI (`live_oi.py`)
+
+OI ka baseline **pichhla session ka close OI** hai (EOD bhavcopy). Live OI usse compare hokar
+"aaj ab tak OI kitna badha/ghata" dikhata hai. Source chain (sabse tez pehle):
+
+1. **Dhan batch quote** (Dhan linked ho to): front-month FUTSTK security IDs ki ek batch call
+   (500 IDs per call). Dhan scrip-master CSV se IDs milte hain (24 ghante cache).
+2. **NSE `quote-derivative` fallback** (Dhan nahi hai): sirf priority stocks (zone wale + top OI movers),
+   max 30, har call ke beech 0.35s gap; 3 lagatar failure par ruk jaata hai. Latency zyada hoti hai,
+   isliye ye "thoda latency wala live" hai.
+3. **EOD bhavcopy OI** (dono fail): label `EOD` ke saath.
+
+Guards: live OI sirf tab use hota hai jab bhavcopy aaj ka nahi hai; live/baseline ratio 0.2–5.0 ke bahar
+ho to us row ke liye EOD dikhata hai (expiry rollover ki galti se bachne ke liye). Cache 30 sec.
+
+Dhan ke liye `secure_config` me Dhan creds hone chahiye (`dhan_api_helper` wala setup). Field names
+(`oi`, `last_price`, master CSV columns) sandbox me verify nahi ho sake; apne network par check karein:
 
 ```bash
-pytest -q test_nse_mcp_client.py test_nse_fno_context.py
+python live_oi.py --probe
+```
+
+Tests (run without internet, against a local mock MCP server and fakes):
+
+```bash
+pytest -q test_nse_mcp_client.py test_nse_fno_context.py test_live_oi.py
 ```
 
 - **Dhan equity fix (latency):** `fast_live_price.py` never imported
