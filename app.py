@@ -720,11 +720,6 @@ def scan_validated_universe(tf: str, frames: dict, params: dict, states=None):
                     "Rule2(DBD)": z.rule2OK,
                     "Rule3(DBR)": z.rule3OK,
                     "Rule4(RBD)": z.rule4OK,
-                    "Pulse": z.pulse,
-                    "Trend": z.trend,
-                    "Aligned?": z.biasAligned,
-                    "Pulse Rule": f"{z.pulseRule}@{z.pulseTf}" if z.pulseRule else "",
-                    "Trend Rule": f"{z.trendRule}@{z.trendTf}" if z.trendRule else "",
                     "HQ Zone": z.isHQ,
                     "Score": z.densityScore,
                     "Touch Count": z.touchCount,
@@ -733,7 +728,7 @@ def scan_validated_universe(tf: str, frames: dict, params: dict, states=None):
                 })
         except Exception:
             continue
-    cols = ["Symbol", "Timeframe", "Ticker", "Direction", "Pattern", "State", "Fresh?", "Entry (Proximal)", "Stop Loss (Distal+Buffer)", "Target (RR set)", "Risk:Reward", "Current Price", "Distance %", "LegOut RR", "RR>=3?", "Engulf OK", "Valid?", "Rule1(RBR)", "Rule2(DBD)", "Rule3(DBR)", "Rule4(RBD)", "Pulse", "Trend", "Aligned?", "Pulse Rule", "Trend Rule", "HQ Zone", "Score", "Touch Count", "Zone Created", "Last Bar Time"]
+    cols = ["Symbol", "Timeframe", "Ticker", "Direction", "Pattern", "State", "Fresh?", "Entry (Proximal)", "Stop Loss (Distal+Buffer)", "Target (RR set)", "Risk:Reward", "Current Price", "Distance %", "LegOut RR", "RR>=3?", "Engulf OK", "Valid?", "Rule1(RBR)", "Rule2(DBD)", "Rule3(DBR)", "Rule4(RBD)", "HQ Zone", "Score", "Touch Count", "Zone Created", "Last Bar Time"]
     if not rows:
         return pd.DataFrame(columns=cols), funnel_agg
     out = pd.DataFrame(rows)[cols]
@@ -838,11 +833,6 @@ def scan_validated_universe_v2(tf: str, frames: dict, params: dict, states=None,
                     "Rule2(DBD)": z.rule2OK,
                     "Rule3(DBR)": z.rule3OK,
                     "Rule4(RBD)": z.rule4OK,
-                    "Pulse": 0,
-                    "Trend": 0,
-                    "Aligned?": True,
-                    "Pulse Rule": "",
-                    "Trend Rule": "",
                     "HQ Zone": z.isHQ,
                     "Score": z.densityScore,
                     "Touch Count": z.touchCount,
@@ -856,7 +846,7 @@ def scan_validated_universe_v2(tf: str, frames: dict, params: dict, states=None,
                 })
         except Exception:
             continue
-    cols = ["Symbol", "Timeframe", "Ticker", "Direction", "Pattern", "State", "Fresh?", "Entry (Proximal)", "Stop Loss (Distal+Buffer)", "Target (RR set)", "Risk:Reward", "Current Price", "Distance %", "LegOut RR", "RR>=3?", "Engulf OK", "Valid?", "Rule1(RBR)", "Rule2(DBD)", "Rule3(DBR)", "Rule4(RBD)", "Pulse", "Trend", "Aligned?", "Pulse Rule", "Trend Rule", "HQ Zone", "Score", "Touch Count", "Zone Created", "Last Bar Time", "Envelope OK", "Block Candles", "Half TF", "Half OK", "Half Aligned %"]
+    cols = ["Symbol", "Timeframe", "Ticker", "Direction", "Pattern", "State", "Fresh?", "Entry (Proximal)", "Stop Loss (Distal+Buffer)", "Target (RR set)", "Risk:Reward", "Current Price", "Distance %", "LegOut RR", "RR>=3?", "Engulf OK", "Valid?", "Rule1(RBR)", "Rule2(DBD)", "Rule3(DBR)", "Rule4(RBD)", "HQ Zone", "Score", "Touch Count", "Zone Created", "Last Bar Time", "Envelope OK", "Block Candles", "Half TF", "Half OK", "Half Aligned %"]
     if not rows:
         return pd.DataFrame(columns=cols), stats_agg
     out = pd.DataFrame(rows)[cols]
@@ -1811,8 +1801,6 @@ def render_table_validated(df, file_label, all_frames=None):
         badges.append(_badge("Supply", str(int(df["Direction"].str.contains("SUPPLY").sum())), "#ea3943"))
         if "Fresh?" in df.columns:
             badges.append(_badge("Fresh", str(int(df["Fresh?"].sum())), "#00bfff"))
-        if "Aligned?" in df.columns:
-            badges.append(_badge("Aligned", str(int(df["Aligned?"].sum())), "#f0b90b"))
         if "RR>=3?" in df.columns:
             badges.append(_badge("RR>=3", str(int(df["RR>=3?"].sum())), "#8a2be2"))
         if "Valid?" in df.columns:
@@ -2185,7 +2173,7 @@ else:
         st.subheader("🔬 Detailed Validated Zone Analysis")
 
         def make_option_v(row):
-            return f"{str(row['Ticker']).replace('.NS', '')} ({row['Timeframe']}) • {row['Direction'].split()[0]} • {row['Distance %']:+.2f}% • Valid {row.get('Valid?', False)} • Aligned {row.get('Aligned?', False)}"
+            return f"{str(row['Ticker']).replace('.NS', '')} ({row['Timeframe']}) • {row['Direction'].split()[0]} • {row['Distance %']:+.2f}% • Valid {row.get('Valid?', False)}"
 
         options_v = [make_option_v(row) for _, row in display_valid.head(50).iterrows()]
         selected_opt_v = st.selectbox("🔍 Validated Zone (Top 50)", options_v, index=0 if options_v else None, key="sel_validated")
@@ -2260,7 +2248,7 @@ else:
                     st.warning("⚠️ Event Risk: " + " | ".join(_rs) + (f" (+{_extra} more)" if _extra else ""))
                 else:
                     st.success("✅ No near-term event risk")
-                st.write(f"**Validation:** Valid={sel_row.get('Valid?')} RR>=3={sel_row.get('RR>=3?')} Engulf={sel_row.get('Engulf OK')} Aligned={sel_row.get('Aligned?')}")
+                st.write(f"**Validation:** Valid={sel_row.get('Valid?')} RR>=3={sel_row.get('RR>=3?')} Engulf={sel_row.get('Engulf OK')}")
                 _nlines = _news_lines_html(news_df, max_show=2)
                 if _nlines:
                     st.write("**Recent News:**")
