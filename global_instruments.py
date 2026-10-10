@@ -23,23 +23,39 @@ UI/README so it isn't mistaken for the real GIFT Nifty futures price.
 """
 from typing import Dict, List, Optional
 
-GLOBAL_INSTRUMENTS = [
+GLOBAL_INSTRUMENTS = GLOBAL_INSTRUMENTS = [
+    # --- इंडेक्स और बॉन्ड्स ---
     {"label": "DXY - US Dollar Index", "yahoo": "DX-Y.NYB", "tv": "TVC:DXY"},
-    {"label": "USDINR - USD/INR", "yahoo": "USDINR=X", "tv": "FX_IDC:USDINR"},
     {"label": "TLT - iShares 20+Y US Treasury Bond ETF", "yahoo": "TLT", "tv": "NASDAQ:TLT"},
     {"label": "US10Y - US 10-Year Treasury Yield", "yahoo": "^TNX", "tv": "TVC:US10Y"},
-    {"label": "XAUUSD - Gold / US Dollar", "yahoo": "GC=F", "tv": "TVC:GOLD"},
-    {"label": "XAGUSD - Silver / US Dollar", "yahoo": "SI=F", "tv": "TVC:SILVER"},
-    {"label": "SPOTCRUDE - WTI Crude Oil", "yahoo": "CL=F", "tv": "TVC:USOIL"},
     {"label": "US30 - Dow Jones Industrial Average", "yahoo": "^DJI", "tv": "TVC:DJI"},
     {"label": "US500 - S&P 500", "yahoo": "^GSPC", "tv": "TVC:SPX"},
     {"label": "000001 - SSE Composite (Shanghai)", "yahoo": "000001.SS", "tv": "SSE:000001"},
     {"label": "XIN9 - FTSE China A50 Index", "yahoo": "XIN9.FGI", "tv": "TVC:XIN9"},
     {"label": "JP225 - Nikkei 225", "yahoo": "^N225", "tv": "TVC:NI225"},
-    {"label": "NIFTY1! - Nifty 50 / GIFT NIFTY Futures (proxy: Nifty 50 spot)",
-     "yahoo": "^NSEI", "tv": "NSE:NIFTY1!"},
+    {"label": "NIFTY1! - Nifty 50 / GIFT NIFTY Futures (proxy: Nifty 50 spot)", "yahoo": "^NSEI", "tv": "NSE:NIFTY1!"},
     {"label": "FTSE100 - UK FTSE 100", "yahoo": "^FTSE", "tv": "TVC:UKX"},
     {"label": "DAX - Germany DAX Index", "yahoo": "^GDAXI", "tv": "XETR:DAX"},
+
+    # --- कमोडिटीज (कीमती धातु, ऊर्जा, बेस मेटल्स) ---
+    {"label": "XAUUSD - Gold / US Dollar", "yahoo": "GC=F", "tv": "TVC:GOLD"},
+    {"label": "XAGUSD - Silver / US Dollar", "yahoo": "SI=F", "tv": "TVC:SILVER"},
+    {"label": "SPOTCRUDE - WTI Crude Oil", "yahoo": "CL=F", "tv": "TVC:USOIL"},
+    {"label": "NATGAS - Natural Gas", "yahoo": "NG=F", "tv": "TVC:NATGAS"},
+    {"label": "COPPER - Copper Futures", "yahoo": "HG=F", "tv": "COMEX:HG1!"},
+    {"label": "ALUMINIUM - Aluminium Cash", "yahoo": "ALI=F", "tv": "TVC:ALUMINIUM"},
+    {"label": "ZINC - Zinc Cash", "yahoo": "ZN=F", "tv": "TVC:ZINC"},
+
+    # --- फॉरेक्स (ग्लोबल और INR पेयर्स) ---
+    {"label": "USDINR - USD / INR", "yahoo": "USDINR=X", "tv": "FX_IDC:USDINR"},
+    {"label": "GBPUSD - GBP / USD", "yahoo": "GBPUSD=X", "tv": "FX:GBPUSD"},
+    {"label": "EURUSD - EUR / USD", "yahoo": "EURUSD=X", "tv": "FX:EURUSD"},
+    {"label": "JPYUSD - JPY / USD", "yahoo": "JPYUSD=X", "tv": "FX:JPYUSD"},
+    {"label": "JPYINR - JPY / INR", "yahoo": "JPYINR=X", "tv": "FX_IDC:JPYINR"},
+    {"label": "GBPINR - GBP / INR", "yahoo": "GBPINR=X", "tv": "FX_IDC:GBPINR"},
+
+    # --- क्रिप्टोकरेंसी ---
+    {"label": "BTCUSD - Bitcoin / US Dollar", "yahoo": "BTC-USD", "tv": "BINANCE:BTCUSDT"},
 ]
 
 # Fixed 6-instrument live ticker-tape shown at the top of the app.
