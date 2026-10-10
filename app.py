@@ -1570,7 +1570,6 @@ def _news_lines_html(news_df, max_show=2):
         if dt is not None and dt < cutoff:
             continue
         seen.add(key)
-        dt = r.get("_dt")
         dpart = dt.strftime("%d-%b") if dt is not None else str(r.get("date", "") or "")[:6]
         lines.append(f"<b style='color:#00bfff;'>{dpart}</b> — {d[:90]}")
         if len(lines) >= max_show:
@@ -1667,14 +1666,13 @@ def render_table_main(df, file_label, all_frames=None):
     if _q:
         display_df = display_df[display_df["Ticker"].astype(str).str.upper().str.contains(_q, na=False)]
         st.caption(f"🔎 Search '{_q}': {len(display_df)} zones mile")
-    _show_clean_table(display_df, "Symbol (TradingView Chart) - Touch to open")
+    _show_clean_table(display_df, "Symbol")
     if ltp_info:
         st.caption(ltp_info)
 
-    st.caption("**Legend:** Table nazdeek zone ke order me hai (sabse nazdeek pehle). Toote zone aur door ke zone Nearest-Zone Filter se hide hain (Settings ⚙️ me badal sakte ho).")
-
     csv = df.drop(columns=["Ticker"]).to_csv(index=False).encode("utf-8")
-    st.download_button(f"⬇️ Download {file_label} zones as CSV", csv, file_name=f"zones_{file_label}.csv", mime="text/csv")
+    with st.expander("⬇️ CSV Download", expanded=False):
+        st.download_button("⬇️ Download zones as CSV", csv, file_name=f"zones_{file_label}.csv", mime="text/csv")
     return display_df
 
 
@@ -1725,9 +1723,9 @@ def render_table_validated(df, file_label, all_frames=None):
     if ltp_info:
         st.caption(ltp_info)
 
-    st.caption("Legend: Table nazdeek zone ke order me hai. Toote/door ke zone Nearest-Zone Filter se hide hain.")
     csv = df.drop(columns=["Ticker"]).to_csv(index=False).encode("utf-8")
-    st.download_button(f"⬇️ Download {file_label} VALIDATED zones as CSV", csv, file_name=f"validated_zones_{file_label}.csv", mime="text/csv")
+    with st.expander("⬇️ CSV Download", expanded=False):
+        st.download_button("⬇️ Download VALIDATED zones as CSV", csv, file_name=f"validated_zones_{file_label}.csv", mime="text/csv")
     return display_df
 
 
@@ -1831,15 +1829,13 @@ if "Main" in st.session_state.app_page:
 
     # ---------- DETAILED ZONE ANALYSIS WITH SHORT LINKS ----------
     if not display_main.empty:
-        st.markdown("---")
-        st.subheader("🔬 Detailed Zone Analysis - Hypothesis + FII + Global + News + Sector (Short Links)")
-        st.caption("Kisi bhi zone ko select karo, uska full hypothesis + FII + Global + News + Sector + Indicators + Short clickable links dekho. Bina API key ke bhi kaam karega, Gemini key ho to AI enhanced.")
+        st.subheader("🔬 Detailed Zone Analysis")
 
         def make_option(row):
-            return f"{row['Ticker']} ({row['Timeframe']}) - {row['Direction'].split()[0]} - {row['Distance %']:+.2f}% - Entry {row['Entry (Proximal)']}"
+            return f"{str(row['Ticker']).replace('.NS', '')} ({row['Timeframe']}) • {row['Direction'].split()[0]} • {row['Distance %']:+.2f}% • Entry {row['Entry (Proximal)']}"
 
         options = [make_option(row) for _, row in display_main.head(50).iterrows()]
-        selected_opt = st.selectbox("Zone chuno detailed analysis ke liye (Top 50 nearest me se)", options, index=0 if options else None)
+        selected_opt = st.selectbox("🔍 Zone (Top 50 nearest)", options, index=0 if options else None)
 
         if selected_opt:
             sel_idx = options.index(selected_opt)
@@ -1902,17 +1898,17 @@ if "Main" in st.session_state.app_page:
 
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.markdown("**📈 Chart Links (Touch to open)**")
+                st.markdown("**📈 Chart Links**")
                 st.markdown(f"[TradingView Chart]({links.get('tradingview', '')})")
                 st.markdown(f"[NSE Quote]({links.get('nse_quote', '')})")
                 st.markdown(f"[Screener.in]({links.get('screener', '')})")
             with col2:
-                st.markdown("**📰 News / Events Links**")
+                st.markdown("**📰 News Links**")
                 st.markdown(f"[NSE Announcements]({links.get('nse_announcements', '')})")
                 st.markdown(f"[Corporate Actions]({links.get('nse_corp_actions', '')})")
                 st.markdown(f"[Sector News: {sector}]({sector_links.get('google_news', '')})")
             with col3:
-                st.markdown("**📊 Indicators (इस स्टॉक के अपने)**")
+                st.markdown("**📊 Indicators**")
                 _ltp, _ltp_src = None, None
                 try:
                     _lmap = cached_live_ltp((sel_ticker,), bool(is_dhan_configured())) or {}
@@ -1933,13 +1929,12 @@ if "Main" in st.session_state.app_page:
                     st.success("✅ No near-term event risk")
                 _nlines = _news_lines_html(news_df, max_show=2)
                 if _nlines:
-                    st.write("**Recent News (fresh, deduped):**")
+                    st.write("**Recent News:**")
                     st.markdown("<br>".join(_nlines), unsafe_allow_html=True)
                 if not corp_df.empty:
                     st.write("**Corp Actions:**")
                     for _, r in corp_df.head(2).iterrows():
                         st.caption(f"- {r.get('purpose', '')} (ex {r.get('ex_date', '')})")
-                st.caption("📍 Freshness: Indicators = last closed Daily candle • Price = live LTP • News/Events = last 7 din (purani hata di) • FII/DII = NSE ka last trading day")
 
             with st.expander("🌐 Global Macro Economic News (Today)", expanded=False):
                 macro_df = cached_macro_news()
@@ -2061,14 +2056,13 @@ else:
 
     # Detailed analysis for validated
     if not display_valid.empty:
-        st.markdown("---")
-        st.subheader("🔬 Detailed Validated Zone Analysis - Hypothesis + FII + Global + News (Short Links)")
+        st.subheader("🔬 Detailed Validated Zone Analysis")
 
         def make_option_v(row):
-            return f"{row['Ticker']} ({row['Timeframe']}) - {row['Direction'].split()[0]} - {row['Distance %']:+.2f}% - Valid {row.get('Valid?', False)} - Aligned {row.get('Aligned?', False)}"
+            return f"{str(row['Ticker']).replace('.NS', '')} ({row['Timeframe']}) • {row['Direction'].split()[0]} • {row['Distance %']:+.2f}% • Valid {row.get('Valid?', False)} • Aligned {row.get('Aligned?', False)}"
 
         options_v = [make_option_v(row) for _, row in display_valid.head(50).iterrows()]
-        selected_opt_v = st.selectbox("Validated zone chuno detailed analysis ke liye (Top 50)", options_v, index=0 if options_v else None, key="sel_validated")
+        selected_opt_v = st.selectbox("🔍 Validated Zone (Top 50)", options_v, index=0 if options_v else None, key="sel_validated")
         if selected_opt_v:
             sel_idx = options_v.index(selected_opt_v)
             sel_row = display_valid.iloc[sel_idx]
@@ -2121,7 +2115,7 @@ else:
                 st.markdown(f"[Corp Actions]({links.get('nse_corp_actions', '')})")
                 st.markdown(f"[Sector {sector} News]({sector_links.get('google_news', '')})")
             with col3:
-                st.markdown("**📊 Indicators (इस स्टॉक के अपने)**")
+                st.markdown("**📊 Indicators**")
                 _ltp, _ltp_src = None, None
                 try:
                     _lmap = cached_live_ltp((sel_ticker,), bool(is_dhan_configured())) or {}
@@ -2143,9 +2137,8 @@ else:
                 st.write(f"**Validation:** Valid={sel_row.get('Valid?')} RR>=3={sel_row.get('RR>=3?')} Engulf={sel_row.get('Engulf OK')} Aligned={sel_row.get('Aligned?')}")
                 _nlines = _news_lines_html(news_df, max_show=2)
                 if _nlines:
-                    st.write("**Recent News (fresh, deduped):**")
+                    st.write("**Recent News:**")
                     st.markdown("<br>".join(_nlines), unsafe_allow_html=True)
-                st.caption("📍 Freshness: Indicators = last closed Daily candle • Price = live LTP • News/Events = last 7 din (purani hata di) • FII/DII = NSE ka last trading day")
 
             if is_gemini_configured():
                 if st.button("🤖 Gemini se Top 10 Validated Zones ka AI Analysis", key="gemini_validated"):
