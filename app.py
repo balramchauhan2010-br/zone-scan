@@ -369,6 +369,8 @@ with settings_pop:
             eod_pct = st.slider("EOD Buffer % (+High / -Low)", 0.0, 50.0, 10.0, 0.5, key="eod_both")
             eod_high_pct = eod_pct
             eod_low_pct = eod_pct
+        use_eod_range = st.checkbox("EOD range filter ON (Main + Validated dono me)", value=False, key="eod_use",
+                                    help="ON = zone ka proximal din ke High/Low (+/- buffer) ke andar hona chahiye. Main aur Validated dono ek hi setting use karte hain.")
 
     with st.expander("🔧 Rule Toggles & Target (Main)", expanded=False):
         target_rr = st.number_input("Target RR (min 1:3)", min_value=3.0, max_value=10.0, value=3.0, step=0.5, key="rr_main")
@@ -673,7 +675,7 @@ def cached_scan(tf, bk, pt, tt, stt):
     return scanner.scan_universe(tf, frames, params, states=list(stt)), frames
 
 
-def scan_validated_universe(tf: str, frames: dict, params: dict, states=None):
+def scan_validated_universe(tf: str, frames: dict, params: dict, states=None, half_frames=None):
     if not ZCV_AVAILABLE:
         return pd.DataFrame(), {}
     states = states or ["Fresh", "Tested"]
@@ -683,7 +685,9 @@ def scan_validated_universe(tf: str, frames: dict, params: dict, states=None):
         if df is None or len(df) < 25:
             continue
         try:
-            engine = zcv.ZoneEngine(df, **params)
+            half = (half_frames or {}).get(symbol)
+            engine = zcv.ZoneEngine(df, half_df=(zcv.to_naive_ist(half) if half is not None and len(half) else None),
+                                    half_tf_name=zcv.half_timeframe_of(tf), **params)
             zones = engine.run()
             for k, v in engine.gate_counts.items():
                 funnel_agg[k] = funnel_agg.get(k, 0) + v
@@ -736,6 +740,35 @@ def scan_validated_universe(tf: str, frames: dict, params: dict, states=None):
     return out.reset_index(drop=True), funnel_agg
 
 
+# ---------- v1 validated: leg-out ko half time-frame me todkar check (zaroori) ----------
+def _build_validated_half_frame(tf, df_base):
+    if df_base is None or len(df_base) == 0:
+        return pd.DataFrame()
+    half_name = zcv.half_timeframe_of(tf)
+    if half_name in ("2D", "2W"):
+        return zcv.build_half_dataframe(tf, df_base=df_base)
+    spec = V2_HALF_MINUTES.get(half_name)
+    if spec is None:
+        return pd.DataFrame()
+    minutes, min_fill = spec
+    return zcv.session_resample(zcv.to_naive_ist(df_base), minutes, min_fill)
+
+
+def _build_validated_half_frames(tf, symbols, tt):
+    half_base = V2_HALF_SOURCE.get(tf, ("", scanner.base_dataset_for_tf(tf)))[1]
+    try:
+        half_raw = BASE_FETCHERS[half_base](cc.last_closed_bucket(BASE_BUCKET_TF[half_base]), tt)
+    except Exception:
+        half_raw = {}
+    out = {}
+    for sym in symbols:
+        try:
+            out[sym] = _build_validated_half_frame(tf, half_raw.get(sym))
+        except Exception:
+            out[sym] = pd.DataFrame()
+    return out
+
+
 @st.cache_data(show_spinner=False, ttl=6 * 3600)
 def cached_validated_scan(tf, bk, pt, tt, stt):
     params = dict(pt)
@@ -743,7 +776,8 @@ def cached_validated_scan(tf, bk, pt, tt, stt):
     raw_by_base = {base: BASE_FETCHERS[base](cc.last_closed_bucket(BASE_BUCKET_TF[base]), tt)}
     frames = scanner.build_timeframe_frames(tf, raw_by_base)
     frames = pine_align_frames(tf, frames)
-    df, funnel = scan_validated_universe(tf, frames, params, states=list(stt))
+    half_frames = _build_validated_half_frames(tf, list(frames.keys()), tt)
+    df, funnel = scan_validated_universe(tf, frames, params, states=list(stt), half_frames=half_frames)
     return df, funnel, frames
 
 
@@ -877,7 +911,7 @@ def cached_validated_scan_v2(tf, bk, pt, tt, stt):
     return df, stats, frames
 
 
-params_main = dict(targetRR=float(target_rr), eodHighBufferPct=float(eod_high_pct), eodLowBufferPct=float(eod_low_pct), enableClosingWickCheck=bool(en_wick), enableLegOutCoverCheck=bool(en_cover), enableHQBaseColourCheck=bool(en_hq), enableWhiteAreaCheck=bool(en_white))
+params_main = dict(targetRR=float(target_rr), eodHighBufferPct=float(eod_high_pct), eodLowBufferPct=float(eod_low_pct), useEodRange=bool(use_eod_range), enableClosingWickCheck=bool(en_wick), enableLegOutCoverCheck=bool(en_cover), enableHQBaseColourCheck=bool(en_hq), enableWhiteAreaCheck=bool(en_white))
 params_main_tuple = tuple(sorted(params_main.items()))
 states_tuple = tuple(state_filter) if state_filter else ("Fresh", "Tested")
 
@@ -892,7 +926,7 @@ elif preset_choice.startswith("high_accuracy"):
 else:
     base_preset = {}
 
-params_valid = dict(targetRR=float(target_rr), eodHighBufferPct=float(eod_high_pct), eodLowBufferPct=float(eod_low_pct), enableClosingWickCheck=bool(en_wick), enableLegOutCoverCheck=bool(en_cover), enableHQBaseColourCheck=bool(en_hq), enableWhiteAreaCheck=bool(en_white), minLegOutRR=float(v_min_rr), useLegOutRRFilter=bool(v_use_rr_filter), requireEngulfForReversal=bool(v_require_engulf), engulfMode=str(v_engulf_mode), engulfRefPosition=str(v_engulf_pos), freshUsesProximal=True, trackFromNextBar=True)
+params_valid = dict(targetRR=float(target_rr), eodHighBufferPct=float(eod_high_pct), eodLowBufferPct=float(eod_low_pct), useEodRange=bool(use_eod_range), enableClosingWickCheck=bool(en_wick), enableLegOutCoverCheck=bool(en_cover), enableHQBaseColourCheck=bool(en_hq), enableWhiteAreaCheck=bool(en_white), minLegOutRR=float(v_min_rr), useLegOutRRFilter=bool(v_use_rr_filter), requireEngulfForReversal=bool(v_require_engulf), engulfMode=str(v_engulf_mode), engulfRefPosition=str(v_engulf_pos), freshUsesProximal=True, trackFromNextBar=True, requireCompletedLegOut=True, requireHalfTfCheck=True, halfDataMissingPolicy="reject")
 if preset_choice != "custom":
     params_valid.update(base_preset)
 params_valid_tuple = tuple(sorted(params_valid.items()))
@@ -2076,7 +2110,7 @@ else:
     st.markdown(
         f"**Validation Preset:** `{preset_choice}` | **Engine:** `{'v2 (leg-out complete + envelope + half-TF)' if use_v2_scan else 'v1 (engulf + completed leg-out)'}` "
         f"| **Params:** RR>={v2_target_rr if use_v2_scan else v_min_rr}, RR Filter={v_use_rr_filter}, Engulf={v_require_engulf}, "
-        f"{'Envelope=' + ('stop+target' if v2_env_stop else 'target-only') + ', Half-TF=' + str(v2_half) + ', MinAligned=' + str(v2_half_pct) if use_v2_scan else 'EOD range=on'}"
+        f"{'Envelope=' + ('stop+target' if v2_env_stop else 'target-only') + ', Half-TF=' + str(v2_half) + ', MinAligned=' + str(v2_half_pct) if use_v2_scan else 'EOD range=' + ('on' if use_eod_range else 'off')}"
     )
 
     if "validated_scan_results" not in st.session_state:

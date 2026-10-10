@@ -29,7 +29,7 @@ SL/TP) bilkul waise hi hai -- sirf neeche likhi cheezein badli hain.
   halfTfMinAlignedPct         0.50    half bars ka aligned share
   halfTfMidBreakMode          "close" mid-line break: close par | "wick"
   halfTfMinRangeShare         0.25    har half-bar ka range >= 25% x avg half range
-  halfDataMissingPolicy       "skip"  half data na ho to zone rakho ("reject" nahi)
+  halfDataMissingPolicy       "reject"  half data na ho to zone rakho ("reject" nahi)
   targetRR                    3.0     (Pine parity 5.0 -> aapka 1:3 plan)
 
 Naye outputs (Zone fields): envelopeOK, envelopeTarget, blockCandles, blockHigh,
@@ -109,7 +109,7 @@ PINE_DEFAULTS: Dict[str, Any] = {
     # Scanner-only EOD range inputs
     "eodHighBufferPct": 10.0,
     "eodLowBufferPct": 10.0,
-    "useEodRange": True,
+    "useEodRange": False,   # main scanner se linked (dono me same setting)
 
     # v1 ke optional validation inputs (bina pulse/trend)
     "useLegOutRRFilter": False,
@@ -139,7 +139,7 @@ PINE_DEFAULTS: Dict[str, Any] = {
     # half data us period ke liye available na ho to: "skip" (zone chalta rahe)
     # ya "reject" (zone hata do). Default skip -- warna 60-din intraday limit
     # ki wajah se purane zones bina check ke hi mar jaate hain.
-    "halfDataMissingPolicy": "skip",
+    "halfDataMissingPolicy": "reject",  # half check "zaroori" - data na ho to zone reject
 }
 
 HARD_MAX_BASE_COUNT = 3
