@@ -1367,11 +1367,12 @@ _tape_done = False
 if PULSE_AVAILABLE:
     try:
         _tape_done = bool(mp.render_pulse_strip(
-            tuple(tickers) if isinstance(tickers, (list, tuple)) else (), prefix_html=_tape_html))
+            tuple(tickers) if isinstance(tickers, (list, tuple)) else (), prefix_html=_tape_html,
+            show_fii=("<b>FII</b>" not in _tape_html)))  # FII/DII tape me hai to Pulse strip me nahi
     except Exception as _e:
         print(f"Pulse strip error (safe, app chalega): {_e}")
 if _tape_html.strip() and not _tape_done:
-    st.markdown(_tape_html, unsafe_allow_html=True)
+    st.markdown('<div style="display:flex;flex-wrap:wrap;align-items:center;gap:2px;">' + _tape_html + "</div>", unsafe_allow_html=True)
 
 # (Auto-Refresh ka call page ke neeche hai - top area me khaali space na bane)
 

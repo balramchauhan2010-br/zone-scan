@@ -102,6 +102,10 @@ def _fnum(x):
         return None
 
 
+# Tape + Trader Pulse chips ek hi flex block me (ek hi "table" jaisa strip)
+TAPE_BLOCK_OPEN = '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:2px;">'
+
+
 def _chip(label: str, value_html: str, color: str) -> str:
     return (f'<span style="background:{color}22;border:1px solid {color};border-radius:6px;'
             f'padding:4px 10px;margin:3px;display:inline-block;font-size:13px;color:#eaeaea;white-space:nowrap;">'
@@ -1459,7 +1463,7 @@ def clear_pulse_caches():
 
 # ------------------------------------------------------------- UI rendering
 
-def render_pulse_strip(tickers=(), prefix_html: str = "") -> bool:
+def render_pulse_strip(tickers=(), prefix_html: str = "", show_fii: bool = True) -> bool:
     """Top tape ke neeche compact strip: phase + PCR + FII/DII + global + AI bias.
 
     prefix_html (market tape ke chips) isi st.markdown block me render hota hai, taaki
@@ -1491,19 +1495,18 @@ def render_pulse_strip(tickers=(), prefix_html: str = "") -> bool:
         chips = [_chip("🕒 Phase", phase["label"], GREY)]
         if pcr:
             chips.append(_chip("NIFTY PCR (OI)", f"{pcr:.2f}", BLUE))
-        if fii_net or dii_net:
+        if show_fii and (fii_net or dii_net):  # tape me FII/DII pehle se ho to yahan dobara nahi
             fii_c = GREEN if fii_net >= 0 else RED
             dii_c = GREEN if dii_net >= 0 else RED
             chips.append(_chip("FII/DII", f'<span style="color:{fii_c};">FII {fii_net:+.0f}Cr</span> <span style="color:{dii_c};">DII {dii_net:+.0f}Cr</span>', GREY))
         chips.append(_chip("🌍 Global", glob.get("label", "N/A"), GREY))
         chips.append(_chip("🧠 AI Bias", bias, bcolor))
-        st.markdown(str(prefix_html or "") + "".join(chips), unsafe_allow_html=True)
+        st.markdown(TAPE_BLOCK_OPEN + str(prefix_html or "") + "".join(chips) + "</div>", unsafe_allow_html=True)
         rendered = True
-        st.caption("🧠 AI Trader Pulse — neeche full Pre-Market / Post-Market briefing hai (delivery %, breadth %, option OI, FII/DII, news + Top 10 Buy/Sell) ↓ | Sources: NSE bhavcopy + option chain + FII API (free, no key)")
     except Exception as e:
         print(f"pulse strip render error (safe): {e}")
         if prefix_html and not rendered:
-            st.markdown(prefix_html, unsafe_allow_html=True)  # tape kam se kam dikhe
+            st.markdown(TAPE_BLOCK_OPEN + prefix_html + "</div>", unsafe_allow_html=True)  # tape kam se kam dikhe
             rendered = True
     return rendered
 
