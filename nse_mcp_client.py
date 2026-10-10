@@ -94,6 +94,10 @@ T_52W = "get_52_week_high_low"                # bhavcopy
 T_BREADTH = "get_market_breadth"              # bhavcopy, advance/decline
 T_TOP_VOLUME = "get_top_by_volume"            # bhavcopy
 T_CORP_ACTIONS = "get_corporate_actions"      # bhavcopy
+T_EQUITY_ALL = "cm_get_equity_stocks"         # live, saare EQ stocks ek call me (bulk)
+T_LIVE_GAINERS = "cm_get_live_gainers"        # live, index-wise grouped
+T_LIVE_LOSERS = "cm_get_live_losers"          # live, index-wise grouped
+T_VOL_ANALYSIS = "get_volume_analysis"        # bhavcopy, avg volume (N din)
 
 _TTL = {
     T_STOCK_QUOTE: 10,
@@ -103,12 +107,22 @@ _TTL = {
     T_BREADTH: 900,
     T_TOP_VOLUME: 900,
     T_CORP_ACTIONS: 1800,
+    T_EQUITY_ALL: 10,
+    T_LIVE_GAINERS: 30,
+    T_LIVE_LOSERS: 30,
+    T_VOL_ANALYSIS: 6 * 3600,
 }
 
 _LTP_KEYS = ("lastPrice", "last_price", "ltp", "lastTradedPrice", "last", "LTP", "close")
 _CHG_PCT_KEYS = ("pChange", "percentChange", "change_pct", "changePct", "pct_change",
                  "percent_change", "chg_pct", "changePercent")
 _CHG_KEYS = ("change", "netChange", "priceChange", "change_abs")
+_PREV_KEYS = ("previousClose", "prev_close", "prevClose", "previous_close", "pClose")
+_VOL_KEYS = ("totalTradedVolume", "tradedVolume", "totalTradedVol", "volume",
+             "totalVolume", "quantityTraded", "vol")
+_AVG_VOL_KEYS = ("averageVolume", "average_volume", "avgVolume", "avg_volume", "avg_vol",
+                 "mean_volume", "average_daily_volume", "avg_daily_volume")
+_SYM_KEYS = ("symbol", "Symbol", "SYMBOL", "tradingSymbol", "trading_symbol")
 
 
 class _Unavailable(RuntimeError):
@@ -180,17 +194,92 @@ def _decode(result: Any) -> Any:
 
 
 def _quote_from(symbol: str, data: Any) -> Optional[dict]:
-    """cm_get_stock_quote ka response -> {ltp, change, change_pct, source}."""
+    """Quote response -> {ltp, change, change_pct, volume, prev_close, source}.
+    change_pct direct na ho to previous close se nikalte hain."""
     ltp = _num(_first(data, _LTP_KEYS))
     if not ltp or ltp <= 0:
         return None
+    prev = _num(_first(data, _PREV_KEYS))
+    chg_pct = _num(_first(data, _CHG_PCT_KEYS))
+    if chg_pct is None and prev:
+        chg_pct = (ltp / prev - 1.0) * 100.0
     return {
         "ltp": ltp,
         "change": _num(_first(data, _CHG_KEYS)) or 0.0,
-        "change_pct": _num(_first(data, _CHG_PCT_KEYS)) or 0.0,
+        "change_pct": chg_pct or 0.0,
+        "volume": _num(_first(data, _VOL_KEYS)),
+        "prev_close": prev,
         "source": "NSE MCP",
         "symbol": symbol,
     }
+
+
+def _sym_of(rec: Any) -> Optional[str]:
+    if not isinstance(rec, dict):
+        return None
+    for k in _SYM_KEYS:
+        v = rec.get(k)
+        if isinstance(v, str) and v.strip():
+            return _clean_symbol(v)
+    return None
+
+
+def extract_records(obj: Any, require_symbol: bool = True) -> List[dict]:
+    """Nested JSON me sabse badi list-of-dicts lautao (require_symbol=True ho to sirf
+    jin records me symbol field ho)."""
+    best: List[dict] = []
+
+    def ok(x: Any) -> bool:
+        return isinstance(x, dict) and (not require_symbol or _sym_of(x) is not None)
+
+    def walk(o: Any, depth: int) -> None:
+        nonlocal best
+        if depth > 6:
+            return
+        if isinstance(o, list):
+            recs = [x for x in o if ok(x)]
+            if len(recs) > len(best):
+                best = recs
+            for x in o[:50]:
+                if isinstance(x, (dict, list)):
+                    walk(x, depth + 1)
+        elif isinstance(o, dict):
+            for v in o.values():
+                if isinstance(v, (dict, list)):
+                    walk(v, depth + 1)
+
+    walk(obj, 0)
+    return best
+
+
+def extract_groups(obj: Any, depth: int = 0) -> Dict[str, List[dict]]:
+    """Index-wise grouped response: {'NIFTY 50': [recs], 'NIFTY BANK': [recs]}.
+    Dict-of-lists ya list me 'index' field - dono handle."""
+    if depth > 3:
+        return {}
+    if isinstance(obj, dict):
+        groups = {}
+        for k, v in obj.items():
+            recs = extract_records(v)
+            if recs:
+                groups[str(k)] = recs
+        if groups:
+            return groups
+        for v in obj.values():
+            if isinstance(v, (dict, list)):
+                g = extract_groups(v, depth + 1)
+                if g:
+                    return g
+    if isinstance(obj, list):
+        by: Dict[str, List[dict]] = {}
+        for r in obj:
+            if _sym_of(r):
+                key = r.get("index") or r.get("indexName") or r.get("Index")
+                if key:
+                    by.setdefault(str(key), []).append(r)
+        if by:
+            return by
+    return {}
 
 
 def _clean_symbol(s: str) -> str:
@@ -447,6 +536,56 @@ class NseMcpClient:
         return self._call(SERVER_BHAV, T_CORP_ACTIONS,
                           {"symbol": _clean_symbol(symbol) if symbol else None})
 
+    def live_snapshot(self, symbols: Iterable[str]) -> Dict[str, dict]:
+        """F&O/any symbols ka live snapshot (ltp, chg%, volume).
+        Pehle bulk tool (ek call), coverage kam ho to baaki ke liye per-symbol quotes."""
+        syms = list(dict.fromkeys(_clean_symbol(s) for s in symbols if str(s).strip()))
+        if not syms or not self.enabled:
+            return {}
+        out: Dict[str, dict] = {}
+        raw = self._call(SERVER_LIVE, T_EQUITY_ALL, {"series": "EQ"})
+        if raw is not None:
+            wanted = set(syms)
+            for rec in extract_records(raw):
+                sym = _sym_of(rec)
+                if sym in wanted:
+                    q = _quote_from(sym, rec)
+                    if q:
+                        out[sym] = q
+        missing = [s for s in syms if s not in out]
+        if missing:
+            out.update(self.live_quotes(missing))
+        return out
+
+    def index_movers(self, side: str = "gainers") -> Dict[str, List[dict]]:
+        """Index-wise live gainers/losers (NSE grouped). {index_name: [records]} - raw records,
+        parsing caller karega (symbol/chg fields)."""
+        tool = T_LIVE_GAINERS if side == "gainers" else T_LIVE_LOSERS
+        raw = self._call(SERVER_LIVE, tool, {})
+        return extract_groups(raw) if raw is not None else {}
+
+    def avg_volume(self, symbol: str, days: int = 20) -> Optional[float]:
+        """N-din average daily volume (bhavcopy server, 6h cache)."""
+        raw = self._call(SERVER_BHAV, T_VOL_ANALYSIS, {"symbol": _clean_symbol(symbol), "days": days})
+        return _num(_first(raw, _AVG_VOL_KEYS)) if raw is not None else None
+
+    def avg_volumes(self, symbols: Iterable[str], days: int = 20) -> Dict[str, float]:
+        """Bahut saare stocks ka average volume ek saath (parallel, 6h cache)."""
+        syms = list(dict.fromkeys(_clean_symbol(s) for s in symbols if str(s).strip()))
+        raws = self._run_many([(SERVER_BHAV, T_VOL_ANALYSIS, {"symbol": s, "days": days}) for s in syms])
+        out: Dict[str, float] = {}
+        for s, raw in zip(syms, raws):
+            v = _num(_first(raw, _AVG_VOL_KEYS)) if raw is not None else None
+            if v and v > 0:
+                out[s] = v
+        return out
+
+    def corporate_actions_many(self, symbols: Iterable[str]) -> Dict[str, Any]:
+        """Har symbol ke corporate actions (parallel). {SYM: raw}"""
+        syms = list(dict.fromkeys(_clean_symbol(s) for s in symbols if str(s).strip()))
+        raws = self._run_many([(SERVER_BHAV, T_CORP_ACTIONS, {"symbol": s}) for s in syms])
+        return {s: r for s, r in zip(syms, raws) if r is not None}
+
     def prewarm(self) -> None:
         """Non-blocking: app start par session pehle se khol do -> pehla user call tez."""
         if self.enabled:
@@ -526,6 +665,11 @@ def _probe(symbol: str) -> None:
     print(json.dumps(c._call(SERVER_LIVE, T_STOCK_QUOTE, {"symbol": symbol}), indent=2, ensure_ascii=False, default=str))
     print("\n== parsed live_quotes ==")
     print(c.live_quotes([symbol]))
+    print("\n== raw cm_get_equity_stocks (bulk, first 600 chars) ==")
+    print(json.dumps(c._call(SERVER_LIVE, T_EQUITY_ALL, {"series": "EQ"}), ensure_ascii=False, default=str)[:600])
+    print("\n== raw cm_get_live_gainers (first 600 chars) ==")
+    print(json.dumps(c._call(SERVER_LIVE, T_LIVE_GAINERS, {}), ensure_ascii=False, default=str)[:600])
+    print("\n== avg_volume(RELIANCE, 20) ==", c.avg_volume(symbol, 20))
     print("\n== raw get_52_week_high_low ==")
     print(json.dumps(c.week52(symbol), indent=2, ensure_ascii=False, default=str))
 

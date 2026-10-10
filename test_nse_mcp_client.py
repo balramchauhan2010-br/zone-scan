@@ -75,6 +75,40 @@ def _start_mock_server() -> str:
         """Advance and decline numbers for a date."""
         return json.dumps({"date": date or "latest", "advances": 1200, "declines": 800, "unchanged": 90})
 
+    @srv.tool()
+    def cm_get_equity_stocks(series: Optional[str] = None) -> str:
+        """Live data for all equity series stocks (EQ, BE and others)."""
+        HITS["cm_get_equity_stocks"] = HITS.get("cm_get_equity_stocks", 0) + 1
+        # TCS jaan-boojh ke bahar: bulk me nahi -> per-symbol fallback test hoga
+        return json.dumps({"data": [
+            {"symbol": "RELIANCE", "lastPrice": 1200.0, "pChange": 2.0, "totalTradedVolume": 3000000},
+            {"symbol": "INFY", "lastPrice": 1500.0, "pChange": -1.0, "totalTradedVolume": 800000},
+            {"symbol": "ZZZ", "lastPrice": 10.0, "pChange": 0.1, "totalTradedVolume": 1000},
+        ]})
+
+    @srv.tool()
+    def cm_get_live_gainers() -> str:
+        """Raw gainers data grouped by index (NIFTY, BANKNIFTY and more)."""
+        return json.dumps({"NIFTY 50": [
+            {"symbol": "RELIANCE", "pChange": 2.0, "lastPrice": 1200.0},
+            {"symbol": "ABCNOTFNO", "pChange": 9.0, "lastPrice": 50.0},
+        ], "NIFTY BANK": [{"symbol": "INFY", "pChange": 0.7, "lastPrice": 1505.0}]})
+
+    @srv.tool()
+    def get_volume_analysis(symbol: str, days: int = 20) -> str:
+        """Volume trend for a stock over N trading days."""
+        return json.dumps({"symbol": symbol.upper(), "days": days, "average_volume": 1000000})
+
+    @srv.tool()
+    def get_corporate_actions(symbol: Optional[str] = None) -> str:
+        """Dividends, splits, bonus and other corporate actions."""
+        if symbol and symbol.upper() == "RELIANCE":
+            return json.dumps({"symbol": "RELIANCE", "actions": [
+                {"purpose": "BONUS 1:1", "exDate": "13-Oct-2026"},
+                {"purpose": "DIVIDEND - RS 5", "exDate": "01-Jan-2020"},
+            ]})
+        return json.dumps({"symbol": symbol, "actions": []})
+
     app = srv.streamable_http_app()
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port,
                                            log_level="error", lifespan="on"))

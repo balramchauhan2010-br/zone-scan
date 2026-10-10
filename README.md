@@ -144,6 +144,8 @@ indicators_hypothesis.py - NEW: RSI/EMA/Supertrend/MACD + rule-based Hinglish hy
 nse_mcp_client.py          - NEW: official NSE MCP client (persistent session, parallel calls,
                            TTL cache, circuit breaker) - keyless live-LTP fallback + market data
 test_nse_mcp_client.py  - NEW: 14 tests (local mock NSE MCP server, no internet needed)
+nse_fno_context.py       - NEW: F&O live context panel (breadth, movers, volume spikes, OI top-10, index movers, corp actions)
+test_nse_fno_context.py  - NEW: panel logic + Streamlit render smoke tests (no internet)
 app.py                   - the Streamlit UI
 requirements.txt
 ```
@@ -216,6 +218,28 @@ NSE publishes two public MCP servers (Streamable HTTP, no login, no API key):
 
 `mcp>=1.20,<2` is in `requirements.txt` (the `mcp` 2.x SDK has a different API).
 
+### F&O Live Context panel (NSE MCP) - new
+
+Ek naya section (app me AI Trader Pulse ke neeche) sirf **NSE F&O stocks** ke liye:
+
+| Tab / block | Data source | Kya dikhata hai |
+| --- | --- | --- |
+| Breadth + mood (top cards) | NSE MCP live snapshot (F&O only) | F&O me kitne stocks up/down, average move, mood |
+| 📈 Top 10 Gainers / Losers | NSE MCP live | F&O stocks ka live % move |
+| ⚡ Volume Spikes | NSE MCP live volume + 20-din average (bhavcopy server, 6h cache) | Time-adjusted volume ratio (session ke hisaab se) |
+| 🔼 / 🔽 Top 10 OI Increase / Decrease | EOD F&O bhavcopy (existing pipeline) + live price + live spike + zone | Futures OI change, EOD OI signal, live context, 'Read' verdict |
+| 🧭 Index Movers (F&O) | NSE MCP `cm_get_live_gainers/losers` (index-wise) filtered to F&O | NIFTY / BANK NIFTY etc. ke andar F&O movers |
+| 🏢 Corporate Actions | NSE MCP `get_corporate_actions` | Zone/OI stocks ke liye ±14 din me ex-date, bonus/split warning |
+
+Important limits:
+- **NSE MCP me OI / derivatives tool nahi hai.** Isliye OI EOD (previous session) ka hai; intraday OI nahi.
+  Live price + volume se ise tazaa karte hain, lekin ye intraday OI nahi hai.
+- Time-adjusted volume ek approximation hai (volume din me U-shape chalta hai; subah spike zyada dikhta hai).
+- Pre-market me volume spike nahi dikhta. Post-market/holiday me poore din ka volume dikhta hai.
+- Pehli baar 20-din average volume ke liye ~210 calls chalti hain (parallel), phir 6 ghante cache.
+- Zone scanner (`zone_core.py`, `scanner.py`) is panel se prabhavit nahi hota; ye context hai.
+
+
 ### Verify the field names on your network (recommended once)
 
 NSE endpoints are not reachable from every network (the build sandbox used for
@@ -233,7 +257,7 @@ output uses other names, add them to `_LTP_KEYS` / `_CHG_PCT_KEYS` in `nse_mcp_c
 Tests (run without internet, against a local mock MCP server):
 
 ```bash
-pytest -q test_nse_mcp_client.py
+pytest -q test_nse_mcp_client.py test_nse_fno_context.py
 ```
 
 - **Dhan equity fix (latency):** `fast_live_price.py` never imported

@@ -2317,6 +2317,18 @@ if PULSE_AVAILABLE:
         print(f"Pulse section error (safe, app chalega): {_e}")
         st.caption("⚠️ AI Trader Pulse load nahi ho paya — scanner bilkul unaffected hai.")
 
+# ==================== NSE MCP - F&O STOCKS LIVE CONTEXT (Top 10 OI + volume spike + movers) ====================
+# Sirf NSE F&O stocks (index hata ke). Live data NSE MCP se; OI EOD F&O bhavcopy se. Zone rules untouched.
+try:
+    import nse_fno_context as nfc
+    NSE_FNO_AVAILABLE = True
+except Exception as _e:
+    print(f"nse_fno_context import failed (safe): {_e}")
+    NSE_FNO_AVAILABLE = False
+
+if NSE_FNO_AVAILABLE:
+    nfc.render_nse_fno_panel(globals().get("_zones_for_pulse"), tuple(symbols))
+
 # ==================== NEXT POWERFUL FEATURES - Auto Trading ====================
 st.markdown("---")
 st.subheader("🚀 Next Powerful Features - Secure & Optional (Bina Key Ke Bhi Fast)")
