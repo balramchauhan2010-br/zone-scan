@@ -181,16 +181,17 @@ def get_fii_dii_summary():
         if not dii_df.empty and "net_value" in dii_df.columns:
             dii_net = float(dii_df["net_value"].iloc[0]) if len(dii_df) > 0 else 0
         
-        # Trend: last 3 days
-        fii_trend = "Neutral"
-        if not fii_df.empty and len(fii_df) >= 3 and "net_value" in fii_df.columns:
-            last3 = fii_df["net_value"].head(3).sum()
-            fii_trend = "Buying" if last3 > 0 else "Selling" if last3 < 0 else "Neutral"
-        
-        dii_trend = "Neutral"
-        if not dii_df.empty and len(dii_df) >= 3 and "net_value" in dii_df.columns:
-            last3 = dii_df["net_value"].head(3).sum()
-            dii_trend = "Buying" if last3 > 0 else "Selling" if last3 < 0 else "Neutral"
+        # Trend: last 3 days; history na hone par net-sign se (NSE API sirf
+        # latest day ki rows deta hai -> pehle hamesha "Neutral" dikhta tha,
+        # chahe net -3569 Cr ho = galat/stale lagta tha)
+        def _trend_from(sub_df, net):
+            if sub_df is not None and not sub_df.empty and len(sub_df) >= 3 and "net_value" in sub_df.columns:
+                last3 = sub_df["net_value"].head(3).sum()
+                return "Buying" if last3 > 0 else "Selling" if last3 < 0 else "Neutral"
+            return "Buying" if net > 0 else "Selling" if net < 0 else "Neutral"
+
+        fii_trend = _trend_from(fii_df, fii_net)
+        dii_trend = _trend_from(dii_df, dii_net)
         
         return {
             "fii_net": fii_net,

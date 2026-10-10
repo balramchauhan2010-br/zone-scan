@@ -20,6 +20,26 @@ NSE_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
+def parse_nse_dt(val) -> datetime:
+    """NSE announcement dates ('30-Jul-2026 13:11:46' ya '30-Jul-2026') -> datetime (safe)."""
+    if not val:
+        return None
+    s = str(val).strip()
+    for fmt in ("%d-%b-%Y %H:%M:%S", "%d-%b-%Y", "%d %b %Y %H:%M:%S", "%d %b %Y", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    try:
+        return pd.to_datetime(s).to_pydatetime()
+    except Exception:
+        return None
+
+def _norm_event_text(val: str) -> str:
+    """Dedupe ke liye desc/subject ko normalize karo (time/space/Case hatao)."""
+    s = str(val or "").lower().strip()
+    return " ".join(s.split())
+
 def nse_get_cookies():
     """NSE ko cookie chahiye pehle"""
     try:
@@ -92,12 +112,28 @@ def get_nse_announcements(symbol: str = None, days: int = 7) -> pd.DataFrame:
         resp = session.get(url, params=params, timeout=15)
         data = resp.json()
         
+        now = datetime.now()
+        cutoff = now - timedelta(days=days)
         rows = []
+        seen = set()
         for item in data:
+            dt = parse_nse_dt(item.get("an_dt") or item.get("date"))
+            desc = item.get("desc") or item.get("subject") or ""
+            # RECENCY FILTER (pehle sirf comment thi, filter lagta hi nahi tha ->
+            # mahino purani announcements bhi aa jati thi = stale/latency data)
+            if dt is not None and dt < cutoff:
+                continue
+            # DEDUPE: same text (time alag ho) baar-baar na dikhe
+            key = _norm_event_text(desc)
+            if key and key in seen:
+                continue
+            if key:
+                seen.add(key)
             rows.append({
                 "symbol": item.get("symbol"),
-                "desc": item.get("desc") or item.get("subject"),
+                "desc": desc,
                 "date": item.get("an_dt") or item.get("date"),
+                "_dt": dt,
                 "attachment": item.get("attchmntText"),
                 "category": item.get("category"),
             })
@@ -111,7 +147,9 @@ def get_nse_announcements(symbol: str = None, days: int = 7) -> pd.DataFrame:
                 df = df[df["symbol"].astype(str).str.upper().str.strip().isin(fno)]
         except Exception:
             pass  # universe list na mile to purana behaviour (filter skip)
-        # Filter last N days if date available
+        # Sabse fresh pehle
+        if not df.empty and "_dt" in df.columns:
+            df = df.sort_values("_dt", ascending=False, na_position="last")
         return df.head(100)
     except Exception as e:
         print(f"NSE announcements error: {e}")
@@ -186,8 +224,10 @@ def is_zone_risky_due_to_event(symbol: str, zone_created_date, days_before: int 
         corp_df = get_nse_corporate_actions(symbol=symbol, days=30)
         ann_df = get_nse_announcements(symbol=symbol, days=15)
         
+        now = datetime.now()
         risky = False
         reasons = []
+        seen_reasons = set()
         
         # Check corporate actions near zone date
         for _, row in corp_df.iterrows():
@@ -197,18 +237,34 @@ def is_zone_risky_due_to_event(symbol: str, zone_created_date, days_before: int 
                 delta = (ex_date - zone_date).days
                 if -days_before <= delta <= days_after:
                     risky = True
-                    reasons.append(f"Corporate Action {row['purpose']} ex-date {row['ex_date']} ({delta} days)")
+                    reason = f"Corporate Action: {row['purpose']} (ex {row['ex_date']})"
+                    key = _norm_event_text(reason)
+                    if key not in seen_reasons:
+                        seen_reasons.add(key)
+                        reasons.append(reason)
             except:
                 continue
         
-        # Check results/announcements
+        # Check results/announcements - SIRF fresh window ke (pehle koi date-check
+        # nahi tha -> mahino purani "Board Meeting" bhi Event Risk dikha rahi thi)
+        ann_cutoff = now - timedelta(days=7)
         for _, row in ann_df.iterrows():
-            desc = str(row.get("desc", "")).lower()
-            if any(k in desc for k in ["result", "dividend", "bonus", "split", "board meeting"]):
+            dt = row.get("_dt")
+            if dt is None:
+                dt = parse_nse_dt(row.get("date"))
+            if dt is not None and dt < ann_cutoff:
+                continue
+            desc = str(row.get("desc", ""))
+            if any(k in desc.lower() for k in ["result", "dividend", "bonus", "split", "board meeting"]):
                 risky = True
-                reasons.append(f"Announcement: {row.get('desc')} on {row.get('date')}")
+                dpart = dt.strftime("%d-%b-%Y") if dt else str(row.get("date", ""))[:11]
+                reason = f"{desc.strip()} ({dpart})"
+                key = _norm_event_text(desc)
+                if key not in seen_reasons:
+                    seen_reasons.add(key)
+                    reasons.append(reason)
         
-        return {"risky": risky, "reasons": reasons, "corp_actions": corp_df, "announcements": ann_df}
+        return {"risky": risky, "reasons": reasons[:3], "corp_actions": corp_df, "announcements": ann_df}
     except Exception as e:
         return {"risky": False, "reasons": [str(e)], "corp_actions": pd.DataFrame(), "announcements": pd.DataFrame()}
 

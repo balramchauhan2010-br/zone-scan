@@ -40,7 +40,7 @@ import streamlit as st
 import numpy as np
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import data_fetch
 import scanner
@@ -1180,7 +1180,12 @@ def overlay_live_prices(df):
         if not ltp_map:
             return df, None
         df = df.copy()
-        new_px = pd.to_numeric(df["Ticker"].map(lambda t: ltp_map.get(str(t), {}).get("ltp")), errors="coerce")
+        # ltp_map ki keys bina-.NS hain (MARUTI), Ticker me .NS ho sakta hai -> dono try karo
+        def _ltp_for(t):
+            t = str(t)
+            d = ltp_map.get(t) or ltp_map.get(t.replace(".NS", "")) or {}
+            return d.get("ltp")
+        new_px = pd.to_numeric(df["Ticker"].map(_ltp_for), errors="coerce")
         mask = new_px.notna()
         if not mask.any():
             return df, None
@@ -1423,6 +1428,156 @@ def _add_hypothesis(display_df):
     return display_df
 
 
+# ---------- PER-STOCK INDICATOR HELPERS (सभी स्टॉक्स के लिए अलग-अलग + clean) ----------
+
+def _compact_ind_str(ind: dict) -> str:
+    """Ek stock ke daily indicators ki chhoti, alag-alag readable string."""
+    try:
+        rsi = float(ind.get("rsi", 50.0) or 50.0)
+        st_d = int(ind.get("supertrend_dir", 0) or 0)
+        st_g = "▲" if st_d == 1 else "▼" if st_d == -1 else "="
+        e = ("✓" if ind.get("above_ema20") else "✗") + ("✓" if ind.get("above_ema50") else "✗") + ("✓" if ind.get("above_ema200") else "✗")
+        vr = float(ind.get("vol_ratio", 1.0) or 1.0)
+        return f"RSI {rsi:.0f} • ST{st_g} • EMA {e} • V {vr:.1f}×"
+    except Exception:
+        return "—"
+
+
+@st.cache_data(show_spinner=False, ttl=1800)
+def compact_indicators_for_tickers(tickers_tuple, bucket):
+    """Har ticker ka apna compact indicator summary (Daily data se).
+    Table me har stock ki row me uske apne (alag-alag) indicators dikhte hain."""
+    out = {}
+    if not tickers_tuple:
+        return out
+    try:
+        daily = cached_fetch_daily(bucket, tuple(tickers_tuple)) or {}
+    except Exception:
+        daily = {}
+    for t in tickers_tuple:
+        try:
+            df_t = daily.get(t)
+            if INDICATOR_AVAILABLE and df_t is not None and len(df_t) >= 30:
+                out[t] = _compact_ind_str(calculate_indicators(df_t))
+            else:
+                out[t] = "—"
+        except Exception:
+            out[t] = "—"
+    return out
+
+
+def _ind_chip(label, value, color="#8b8b8b"):
+    return (f'<span style="background:{color}22;border:1px solid {color};border-radius:6px;'
+            f'padding:3px 8px;margin:2px;display:inline-block;font-size:12px;color:#eaeaea;white-space:nowrap;">'
+            f'{label} <b style="color:{color};">{value}</b></span>')
+
+
+def _fmt_price(v):
+    try:
+        f = float(v)
+        return f"₹{f:,.2f}"
+    except Exception:
+        return "N/A"
+
+
+def _fii_dii_context_text():
+    """Fresh + sahi FII/DII context: trend galat 'Neutral' na dikhe aur
+    'as of <date>' ke saath (stale data turant dikhe)."""
+    try:
+        s = cached_fii_summary() or {}
+    except Exception:
+        s = {}
+    fii_net = float(s.get("fii_net") or 0)
+    dii_net = float(s.get("dii_net") or 0)
+    fii_t = s.get("fii_trend")
+    if fii_t in (None, "", "N/A"):
+        fii_t = "Buying" if fii_net > 0 else "Selling" if fii_net < 0 else "Neutral"
+    dii_t = s.get("dii_trend")
+    if dii_t in (None, "", "N/A"):
+        dii_t = "Buying" if dii_net > 0 else "Selling" if dii_net < 0 else "Neutral"
+    last = str(s.get("last_date") or "").strip()
+    asof = f" • as of {last[:11]}" if last and last.lower() != "n/a" else ""
+    return f"FII {fii_t} {fii_net:+,.0f}Cr • DII {dii_t} {dii_net:+,.0f}Cr{asof}"
+
+
+def _render_indicators_panel_md(ind, ltp=None, ltp_src=None):
+    """Detail view ka saaf Indicators panel (chips) - per selected stock."""
+    rsi = float(ind.get("rsi", 50.0) or 50.0)
+    rsi_c = "#ea3943" if rsi <= 30 else "#16c784" if rsi >= 70 else "#00bfff"
+    rsi_tag = " (Oversold)" if rsi <= 30 else " (Overbought)" if rsi >= 70 else ""
+    st_d = int(ind.get("supertrend_dir", 0) or 0)
+    st_v, st_c = ("▲ Bullish", "#16c784") if st_d == 1 else (("▼ Bearish", "#ea3943") if st_d == -1 else ("= Neutral", "#8b8b8b"))
+    e20 = "✓" if ind.get("above_ema20") else "✗"
+    e50 = "✓" if ind.get("above_ema50") else "✗"
+    e200 = "✓" if ind.get("above_ema200") else "✗"
+    macd = float(ind.get("macd_hist", 0.0) or 0.0)
+    vr = float(ind.get("vol_ratio", 1.0) or 1.0)
+    px_live = ltp if ltp else ind.get("price")
+    px_txt = _fmt_price(px_live)
+    px_tag = f" ⚡LIVE {ltp_src}" if ltp else " (Daily close)"
+    chips = [
+        _ind_chip("Price", px_txt + px_tag, "#00bfff"),
+        _ind_chip("RSI(14)", f"{rsi:.1f}{rsi_tag}", rsi_c),
+        _ind_chip("EMA 20/50/200", f"{e20} {e50} {e200}  (✓ = Price ऊपर)", "#8b8b8b"),
+        _ind_chip("Supertrend", st_v, st_c),
+        _ind_chip("MACD Hist", f"{macd:+.2f}", "#16c784" if macd >= 0 else "#ea3943"),
+        _ind_chip("Vol", f"{vr:.1f}× SMA20", "#16c784" if vr >= 1.2 else "#8b8b8b"),
+    ]
+    return "<div style='line-height:2.1;'>" + "".join(chips) + "</div>"
+
+
+def _render_context_panel_md(sector, sector_idx, global_ctx):
+    chips = [
+        _ind_chip("Sector", f"{sector} ({sector_idx})", "#8a2be2"),
+        _ind_chip("FII/DII", _fii_dii_context_text(), "#8b8b8b"),
+        _ind_chip("Global", str(global_ctx or "N/A"), "#00bfff"),
+    ]
+    return "<div style='line-height:2.1;'>" + "".join(chips) + "</div>"
+
+
+def _clean_risk_reasons(risk_info, max_show=2):
+    """Event Risk reasons: dedupe + max 2 dikhao, baki '+N more'."""
+    out, seen = [], set()
+    for r in (risk_info or {}).get("reasons") or []:
+        txt = " ".join(str(r).split())
+        key = txt.lower()
+        if not txt or key in seen:
+            continue
+        seen.add(key)
+        out.append(txt)
+    return out[:max_show], max(0, len(out) - max_show)
+
+
+def _news_lines_html(news_df, max_show=2):
+    """Recent News: dedupe + date ke saath fresh lines."""
+    if news_df is None or news_df.empty:
+        return []
+    cutoff = datetime.now() - timedelta(days=7)
+    lines, seen = [], set()
+    for _, r in news_df.head(8).iterrows():
+        d = str(r.get("desc", "") or "").strip()
+        key = " ".join(d.lower().split())
+        if not d or key in seen:
+            continue
+        dt = r.get("_dt")
+        if dt is None:
+            try:
+                from news_corporate_events import parse_nse_dt
+                dt = parse_nse_dt(r.get("date"))
+            except Exception:
+                dt = None
+        # defense-in-depth: 7 din se purani koi bhi line na dikhe
+        if dt is not None and dt < cutoff:
+            continue
+        seen.add(key)
+        dt = r.get("_dt")
+        dpart = dt.strftime("%d-%b") if dt is not None else str(r.get("date", "") or "")[:6]
+        lines.append(f"<b style='color:#00bfff;'>{dpart}</b> — {d[:90]}")
+        if len(lines) >= max_show:
+            break
+    return lines
+
+
 _NEWS_COLS = ["🔗 News Link", "📰 Powerful News", "📰 News", "⚡ Powerful", "⚡ News Desc", "🤖 AI Link"]
 
 _DROP_COLS = [
@@ -1435,10 +1590,18 @@ _DROP_COLS = [
     "Envelope OK", "Block Candles", "Half TF", "Half OK", "Half Aligned %",
 ]
 
-_DESIRED_ORDER = ["Symbol", "Timeframe", "Direction", "Pattern", "Entry (Proximal)", "Stop Loss (Distal+Buffer)", "Target (RR set)", "Current Price", "Distance %", "Delivery %", "ΔDeliv pp", "Vol ×Yday", "OI Signal"]
+_DESIRED_ORDER = ["Symbol", "Timeframe", "Direction", "Pattern", "Entry (Proximal)", "Stop Loss (Distal+Buffer)", "Target (RR set)", "Current Price", "Distance %", "📊 Ind", "Delivery %", "ΔDeliv pp", "Vol ×Yday", "OI Signal"]
 
 
 def _show_clean_table(display_df, symbol_title):
+    # हर स्टॉक के अपने (अलग-अलग) Daily indicators - per-row compact column
+    try:
+        if "Ticker" in display_df.columns and not display_df.empty:
+            _tk = tuple(sorted(set(display_df["Ticker"].astype(str))))
+            _imap = compact_indicators_for_tickers(_tk, cc.last_closed_bucket("Daily"))
+            display_df["📊 Ind"] = display_df["Ticker"].astype(str).map(lambda t: _imap.get(t, "—"))
+    except Exception:
+        pass
     for col in _NEWS_COLS:
         if col in display_df.columns:
             display_df = display_df.drop(columns=[col])
@@ -1462,6 +1625,8 @@ def _show_clean_table(display_df, symbol_title):
             "Target (RR set)": st.column_config.NumberColumn("Target", format="%.2f"),
             "Current Price": st.column_config.NumberColumn("LTP", format="%.2f"),
             "Distance %": st.column_config.NumberColumn("Dist %", format="%.2f%%"),
+            "📊 Ind": st.column_config.TextColumn("Ind", width="small",
+                                                  help="Us stock ke apne Daily indicators: RSI • Supertrend (▲/▼) • EMA 20/50/200 (✓=Price ऊपर, ✗=नीचे) • Volume vs SMA20. Full detail नीचे 'Detailed Zone Analysis' में."),
             "Delivery %": st.column_config.NumberColumn("Deliv %", format="%.1f%%", help="Aaj ka delivery % (NSE bhavcopy)"),
             "ΔDeliv pp": st.column_config.NumberColumn("ΔDeliv pp", format="%+.1f", help="Delivery % change vs pichhla din (pp)"),
             "Vol ×Yday": st.column_config.NumberColumn("Vol ×", format="%.2f", help="Volume vs pichhla din (×)"),
@@ -1695,7 +1860,7 @@ if "Main" in st.session_state.app_page:
             sector_idx = get_sector_index(sector) if SECTOR_AVAILABLE else "NIFTY 50"
 
             fii_sum = cached_fii_summary()
-            fii_ctx = f"FII {fii_sum.get('fii_trend')} Net {fii_sum.get('fii_net'):+.0f}Cr, DII {fii_sum.get('dii_trend')} Net {fii_sum.get('dii_net'):+.0f}Cr" if FII_AVAILABLE else "FII data N/A"
+            fii_ctx = _fii_dii_context_text() if FII_AVAILABLE else "FII data N/A"
 
             global_ctx = ""
             try:
@@ -1747,31 +1912,34 @@ if "Main" in st.session_state.app_page:
                 st.markdown(f"[Corporate Actions]({links.get('nse_corp_actions', '')})")
                 st.markdown(f"[Sector News: {sector}]({sector_links.get('google_news', '')})")
             with col3:
-                st.markdown("**📊 Indicators**")
-                st.write(f"Price: {indicators.get('price', 'N/A')}")
-                st.write(f"RSI(14): {indicators.get('rsi', 0):.1f}")
-                st.write(f"EMA20: {'>' if indicators.get('above_ema20') else '<'} Price | EMA50: {'>' if indicators.get('above_ema50') else '<'}")
-                st.write(f"EMA200: {'>' if indicators.get('above_ema200') else '<'} Price")
-                st.write(f"Supertrend: {'Bullish' if indicators.get('supertrend_dir') == 1 else 'Bearish' if indicators.get('supertrend_dir') == -1 else 'Neutral'}")
-                st.write(f"MACD Hist: {indicators.get('macd_hist', 0):+.2f}")
-                st.write(f"Vol: {indicators.get('vol_ratio', 1):.1f}x SMA20")
+                st.markdown("**📊 Indicators (इस स्टॉक के अपने)**")
+                _ltp, _ltp_src = None, None
+                try:
+                    _lmap = cached_live_ltp((sel_ticker,), bool(is_dhan_configured())) or {}
+                    _d = _lmap.get(str(sel_ticker)) or _lmap.get(str(sel_ticker).replace(".NS", "")) or {}
+                    _ltp = _d.get("ltp")
+                    if _ltp:
+                        _ltp_src = "Dhan" if is_dhan_configured() else "Yahoo"
+                except Exception:
+                    _ltp = None
+                st.markdown(_render_indicators_panel_md(indicators, ltp=_ltp, ltp_src=_ltp_src), unsafe_allow_html=True)
             with col4:
                 st.markdown("**🌍 Context**")
-                st.write(f"**Sector:** {sector} ({sector_idx})")
-                st.write(f"**FII/DII:** {fii_ctx}")
-                st.write(f"**Global:** {global_ctx}")
-                if risk_info.get("risky"):
-                    st.warning(f"⚠️ Event Risk: {', '.join(risk_info['reasons'][:2])}")
+                st.markdown(_render_context_panel_md(sector, sector_idx, global_ctx), unsafe_allow_html=True)
+                _rs, _extra = _clean_risk_reasons(risk_info)
+                if _rs:
+                    st.warning("⚠️ Event Risk: " + " | ".join(_rs) + (f" (+{_extra} more)" if _extra else ""))
                 else:
                     st.success("✅ No near-term event risk")
-                if not news_df.empty:
-                    st.write("**Recent News:**")
-                    for _, r in news_df.head(2).iterrows():
-                        st.caption(f"- {r.get('desc', '')[:100]}")
+                _nlines = _news_lines_html(news_df, max_show=2)
+                if _nlines:
+                    st.write("**Recent News (fresh, deduped):**")
+                    st.markdown("<br>".join(_nlines), unsafe_allow_html=True)
                 if not corp_df.empty:
                     st.write("**Corp Actions:**")
                     for _, r in corp_df.head(2).iterrows():
-                        st.caption(f"- {r.get('purpose', '')} ex {r.get('ex_date', '')}")
+                        st.caption(f"- {r.get('purpose', '')} (ex {r.get('ex_date', '')})")
+                st.caption("📍 Freshness: Indicators = last closed Daily candle • Price = live LTP • News/Events = last 7 din (purani hata di) • FII/DII = NSE ka last trading day")
 
             with st.expander("🌐 Global Macro Economic News (Today)", expanded=False):
                 macro_df = cached_macro_news()
@@ -1916,7 +2084,7 @@ else:
             sector = get_sector(sel_ticker) if SECTOR_AVAILABLE else "Others"
             sector_idx = get_sector_index(sector) if SECTOR_AVAILABLE else "NIFTY 50"
             fii_sum = cached_fii_summary()
-            fii_ctx = f"FII {fii_sum.get('fii_trend')} Net {fii_sum.get('fii_net'):+.0f}Cr, DII {fii_sum.get('dii_trend')} Net {fii_sum.get('dii_net'):+.0f}Cr" if FII_AVAILABLE else "FII N/A"
+            fii_ctx = _fii_dii_context_text() if FII_AVAILABLE else "FII N/A"
             global_ctx = ""
             try:
                 if GLOBAL_AVAILABLE:
@@ -1953,20 +2121,31 @@ else:
                 st.markdown(f"[Corp Actions]({links.get('nse_corp_actions', '')})")
                 st.markdown(f"[Sector {sector} News]({sector_links.get('google_news', '')})")
             with col3:
-                st.markdown("**📊 Indicators**")
-                st.write(f"RSI: {indicators.get('rsi', 0):.1f} | Vol {indicators.get('vol_ratio', 1):.1f}x")
-                st.write(f"EMA20/50/200: {'>' if indicators.get('above_ema20') else '<'}/{'>' if indicators.get('above_ema50') else '<'}/{'>' if indicators.get('above_ema200') else '<'}")
-                st.write(f"Supertrend: {'Bullish' if indicators.get('supertrend_dir') == 1 else 'Bearish' if indicators.get('supertrend_dir') == -1 else 'Neutral'} | MACD {indicators.get('macd_hist', 0):+.2f}")
+                st.markdown("**📊 Indicators (इस स्टॉक के अपने)**")
+                _ltp, _ltp_src = None, None
+                try:
+                    _lmap = cached_live_ltp((sel_ticker,), bool(is_dhan_configured())) or {}
+                    _d = _lmap.get(str(sel_ticker)) or _lmap.get(str(sel_ticker).replace(".NS", "")) or {}
+                    _ltp = _d.get("ltp")
+                    if _ltp:
+                        _ltp_src = "Dhan" if is_dhan_configured() else "Yahoo"
+                except Exception:
+                    _ltp = None
+                st.markdown(_render_indicators_panel_md(indicators, ltp=_ltp, ltp_src=_ltp_src), unsafe_allow_html=True)
             with col4:
                 st.markdown("**🌍 Context + Risk**")
-                st.write(f"Sector: {sector} ({sector_idx})")
-                st.write(f"FII/DII: {fii_ctx}")
-                st.write(f"Global: {global_ctx}")
-                if risk_info.get("risky"):
-                    st.warning(f"⚠️ {', '.join(risk_info['reasons'][:2])}")
+                st.markdown(_render_context_panel_md(sector, sector_idx, global_ctx), unsafe_allow_html=True)
+                _rs, _extra = _clean_risk_reasons(risk_info)
+                if _rs:
+                    st.warning("⚠️ Event Risk: " + " | ".join(_rs) + (f" (+{_extra} more)" if _extra else ""))
                 else:
-                    st.success("✅ No event risk")
+                    st.success("✅ No near-term event risk")
                 st.write(f"**Validation:** Valid={sel_row.get('Valid?')} RR>=3={sel_row.get('RR>=3?')} Engulf={sel_row.get('Engulf OK')} Aligned={sel_row.get('Aligned?')}")
+                _nlines = _news_lines_html(news_df, max_show=2)
+                if _nlines:
+                    st.write("**Recent News (fresh, deduped):**")
+                    st.markdown("<br>".join(_nlines), unsafe_allow_html=True)
+                st.caption("📍 Freshness: Indicators = last closed Daily candle • Price = live LTP • News/Events = last 7 din (purani hata di) • FII/DII = NSE ka last trading day")
 
             if is_gemini_configured():
                 if st.button("🤖 Gemini se Top 10 Validated Zones ka AI Analysis", key="gemini_validated"):
