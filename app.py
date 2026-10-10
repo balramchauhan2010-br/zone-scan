@@ -383,7 +383,7 @@ with settings_pop:
         preset_choice = st.selectbox("Validation Preset", ["spec_strict (aapki spec jaise)", "max_zones (sabse zyada)", "better_wr (better win-rate)", "high_accuracy (sabse tez filter)", "custom"], index=0)
         v_use_rr_filter = st.checkbox("Use LegOut RR Filter (1:3 reject) - Rule 2", value=False)
         v_min_rr = st.slider("Min LegOut RR", 1.0, 5.0, 3.0, 0.5)
-        v_require_engulf = st.checkbox("Require Engulf for Reversal DBR/RBD - Rule 3/4", value=True)
+        v_require_engulf = st.checkbox("Require Engulf for Reversal DBR/RBD - Rule 3/4", value=False)
         v_engulf_mode = st.selectbox("Engulf Mode", ["distal_close", "distal_wick", "proximal_close", "proximal_wick"], index=0)
         v_engulf_pos = st.selectbox("Engulf Ref Position", ["high", "low", "base"], index=0)
         st.markdown("**Display Filters (Validated)**")

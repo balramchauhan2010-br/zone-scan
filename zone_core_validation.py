@@ -20,10 +20,10 @@ SL/TP) bilkul waise hi hai -- sirf neeche likhi cheezein badli hain.
 ------------------------------ NAYE v2 INPUTS --------------------------------
   requireCompletedLegOut      True    leg-out candle band hone par hi zone valid
   assumeLastBarLive           False   live scan me aakhri (forming) bar live maano
-  requireEnvelopeInLegOut     True    entry+stop+target teeno lines leg-out ke andar
+  requireEnvelopeInLegOut     False   entry+stop+target teeno lines leg-out ke andar (default OFF)
   envelopeRR                  3.0     kis RR tak envelope check (targetRR ke saath)
-  envelopeCheckStopSide       True    distal (stop) line bhi block ke andar ho
-  envelopeCheckTargetSide     True    1:RR target bhi block ke andar ho
+  envelopeCheckStopSide       False   distal (stop) line bhi block ke andar ho (default OFF)
+  envelopeCheckTargetSide     False   1:RR target bhi block ke andar ho (default OFF)
   legOutContinuationCandles   3       single candle me na aaye to lagatar 3 candles
   requireHalfTfCheck          True    half time-frame validation ON
   halfTfMinAlignedPct         0.50    half bars ka aligned share
@@ -114,7 +114,7 @@ PINE_DEFAULTS: Dict[str, Any] = {
     # v1 ke optional validation inputs (bina pulse/trend)
     "useLegOutRRFilter": False,
     "minLegOutRR": 2.0,
-    "requireEngulfForReversal": True,
+    "requireEngulfForReversal": False,   # default OFF (pehle ON tha)
     "engulfLookbackBars": 25,
     "engulfAllowBrokenRef": True,
     "engulfMode": "distal_close",
@@ -126,10 +126,10 @@ PINE_DEFAULTS: Dict[str, Any] = {
     "requireCompletedLegOut": True,
     "assumeLastBarLive": False,
     # (3) entry / SL / target leg-out (ya 3 continuation candles) ke andar
-    "requireEnvelopeInLegOut": True,
+    "requireEnvelopeInLegOut": False,    # default OFF (pehle ON tha)
     "envelopeRR": 3.0,
-    "envelopeCheckStopSide": True,     # distal (stop) bhi block ke andar ho
-    "envelopeCheckTargetSide": True,   # 1:3 target bhi block ke andar ho
+    "envelopeCheckStopSide": False,    # distal (stop) check - default OFF
+    "envelopeCheckTargetSide": False,  # 1:3 target check - default OFF
     "legOutContinuationCandles": 3,
     # (4) half time-frame validation
     "requireHalfTfCheck": True,
