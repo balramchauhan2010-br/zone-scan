@@ -39,6 +39,17 @@ GLOBAL_INSTRUMENTS = [
      "yahoo": "^NSEI", "tv": "NSEIX:NIFTY1!"},
     {"label": "FTSE100 - UK FTSE 100", "yahoo": "^FTSE", "tv": "TVC:UKX"},
     {"label": "DAX - Germany DAX Index", "yahoo": "^GDAXI", "tv": "XETR:DAX"},
+    # Commodities / currencies / crypto (Top Global row se) - scanner universe me bhi
+    {"label": "COPPER - COMEX Copper Futures", "yahoo": "HG=F", "tv": "COMEX:HG1!"},
+    {"label": "ALUMINIUM - COMEX Aluminium Futures", "yahoo": "ALI=F", "tv": "COMEX:ALI1!"},
+    {"label": "ZINC - LME Special High Grade Zinc Futures", "yahoo": "ZNC=F", "tv": "LME:ZS1!"},
+    {"label": "NATURAL GAS - NYMEX Natural Gas Futures", "yahoo": "NG=F", "tv": "NYMEX:NG1!"},
+    {"label": "GBPUSD - GBP / USD", "yahoo": "GBPUSD=X", "tv": "FX:GBPUSD"},
+    {"label": "EURUSD - EUR / USD", "yahoo": "EURUSD=X", "tv": "FX:EURUSD"},
+    {"label": "USDJPY - USD / JPY", "yahoo": "JPY=X", "tv": "FX:USDJPY"},
+    {"label": "JPYINR - JPY / INR", "yahoo": "JPYINR=X", "tv": "FX_IDC:JPYINR"},
+    {"label": "GBPINR - GBP / INR", "yahoo": "GBPINR=X", "tv": "FX_IDC:GBPINR"},
+    {"label": "BTCUSD - Bitcoin / USD", "yahoo": "BTC-USD", "tv": "BITSTAMP:BTCUSD"},
 ]
 
 # Top ticker-tape (index + crude). USD/INR aur XAUUSD ab TOP_GLOBAL row me hain
