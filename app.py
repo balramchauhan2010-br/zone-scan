@@ -386,8 +386,6 @@ with settings_pop:
         v_require_engulf = st.checkbox("Require Engulf for Reversal DBR/RBD - Rule 3/4", value=True)
         v_engulf_mode = st.selectbox("Engulf Mode", ["distal_close", "distal_wick", "proximal_close", "proximal_wick"], index=0)
         v_engulf_pos = st.selectbox("Engulf Ref Position", ["high", "low", "base"], index=0)
-        v_use_pulse_trend = st.checkbox("Use Pulse/Trend (Rule 7)", value=True)
-        v_require_aligned = st.checkbox("Require Pulse+Trend Aligned", value=False)
         st.markdown("**Display Filters (Validated)**")
         v_show_only_fresh = st.checkbox("Show only Fresh", value=False)
         v_show_only_tradable = st.checkbox("Show only Tradable (valid + RR>=3)", value=False)
@@ -398,13 +396,13 @@ with settings_pop:
         if ZCV2_AVAILABLE:
             engine_choice = st.radio(
                 "Validated page kaunsa engine use kare?",
-                ["v1 (purana: pulse/trend + engulf rules)", "v2 (naye niyam: leg-out complete + envelope + half-TF)"],
+                ["v1 (engulf + completed leg-out rules)", "v2 (naye niyam: leg-out complete + envelope + half-TF)"],
                 index=0,
                 help="v2 me pulse/trend ke saare rules hata diye gaye hain; zone sirf leg-out candle complete hone par valid hota hai, "
                      "aur envelope (entry+SL+target) + half time-frame check lagta hai. v2 ke liye repo me zone_core_validation_v2.py hona chahiye.",
             )
         else:
-            engine_choice = "v1 (purana: pulse/trend + engulf rules)"
+            engine_choice = "v1 (engulf + completed leg-out rules)"
             st.info("○ zone_core_validation_v2.py nahi mila - sirf v1 engine available hai. v2 use karne ke liye ye file repo me upload karo.")
 
         use_v2 = engine_choice.startswith("v2")
@@ -689,12 +687,6 @@ def scan_validated_universe(tf: str, frames: dict, params: dict, states=None):
             zones = engine.run()
             for k, v in engine.gate_counts.items():
                 funnel_agg[k] = funnel_agg.get(k, 0) + v
-            if params.get("usePulseTrend", True):
-                try:
-                    rules = zcv.resolve_rules(tf)
-                    zcv.apply_pulse_trend(zones, df, df, rules["pulse"], rules["trend"], rules["pulse_tf"], rules["trend_tf"])
-                except Exception:
-                    pass
             active = [z for z in zones if z.state in states]
             if not active:
                 continue
@@ -904,13 +896,13 @@ if preset_choice.startswith("spec_strict"):
 elif preset_choice.startswith("max_zones"):
     base_preset = dict(legInMinBodyPct=0.25, maxBaseAtrMult=1.8, minValidScore=0, requireEngulfForReversal=False, useLegOutRRFilter=False)
 elif preset_choice.startswith("better_wr"):
-    base_preset = dict(legInMinBodyPct=0.25, maxBaseAtrMult=1.8, minValidScore=0, requireEngulfForReversal=False, requirePulseTrendAligned=True, useLegOutRRFilter=False)
+    base_preset = dict(legInMinBodyPct=0.25, maxBaseAtrMult=1.8, minValidScore=0, requireEngulfForReversal=False, useLegOutRRFilter=False)
 elif preset_choice.startswith("high_accuracy"):
-    base_preset = dict(legInMinBodyPct=0.25, maxBaseAtrMult=1.8, minValidScore=0, requireEngulfForReversal=True, engulfMode="distal_close", requirePulseTrendAligned=True, useLegOutRRFilter=True)
+    base_preset = dict(legInMinBodyPct=0.25, maxBaseAtrMult=1.8, minValidScore=0, requireEngulfForReversal=True, engulfMode="distal_close", useLegOutRRFilter=True)
 else:
     base_preset = {}
 
-params_valid = dict(targetRR=float(target_rr), eodHighBufferPct=float(eod_high_pct), eodLowBufferPct=float(eod_low_pct), enableClosingWickCheck=bool(en_wick), enableLegOutCoverCheck=bool(en_cover), enableHQBaseColourCheck=bool(en_hq), enableWhiteAreaCheck=bool(en_white), minLegOutRR=float(v_min_rr), useLegOutRRFilter=bool(v_use_rr_filter), requireEngulfForReversal=bool(v_require_engulf), engulfMode=str(v_engulf_mode), engulfRefPosition=str(v_engulf_pos), usePulseTrend=bool(v_use_pulse_trend), requirePulseTrendAligned=bool(v_require_aligned), freshUsesProximal=True, trackFromNextBar=True)
+params_valid = dict(targetRR=float(target_rr), eodHighBufferPct=float(eod_high_pct), eodLowBufferPct=float(eod_low_pct), enableClosingWickCheck=bool(en_wick), enableLegOutCoverCheck=bool(en_cover), enableHQBaseColourCheck=bool(en_hq), enableWhiteAreaCheck=bool(en_white), minLegOutRR=float(v_min_rr), useLegOutRRFilter=bool(v_use_rr_filter), requireEngulfForReversal=bool(v_require_engulf), engulfMode=str(v_engulf_mode), engulfRefPosition=str(v_engulf_pos), freshUsesProximal=True, trackFromNextBar=True)
 if preset_choice != "custom":
     params_valid.update(base_preset)
 params_valid_tuple = tuple(sorted(params_valid.items()))
@@ -2094,9 +2086,9 @@ else:
     if use_v2 and not ZCV2_AVAILABLE:
         st.warning("⚠️ v2 engine select kiya hai par zone_core_validation_v2.py nahi mila - v1 se scan ho raha hai. File repo me upload karo.")
     st.markdown(
-        f"**Validation Preset:** `{preset_choice}` | **Engine:** `{'v2 (leg-out complete + envelope + half-TF)' if use_v2_scan else 'v1 (pulse/trend + engulf)'}` "
+        f"**Validation Preset:** `{preset_choice}` | **Engine:** `{'v2 (leg-out complete + envelope + half-TF)' if use_v2_scan else 'v1 (engulf + completed leg-out)'}` "
         f"| **Params:** RR>={v2_target_rr if use_v2_scan else v_min_rr}, RR Filter={v_use_rr_filter}, Engulf={v_require_engulf}, "
-        f"{'Envelope=' + ('stop+target' if v2_env_stop else 'target-only') + ', Half-TF=' + str(v2_half) + ', MinAligned=' + str(v2_half_pct) if use_v2_scan else 'PulseTrend=' + str(v_use_pulse_trend) + ', Aligned Required=' + str(v_require_aligned)}"
+        f"{'Envelope=' + ('stop+target' if v2_env_stop else 'target-only') + ', Half-TF=' + str(v2_half) + ', MinAligned=' + str(v2_half_pct) if use_v2_scan else 'EOD range=on'}"
     )
 
     if "validated_scan_results" not in st.session_state:
