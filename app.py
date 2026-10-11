@@ -211,13 +211,55 @@ st.set_page_config(page_title="NSE F&O Supply/Demand Zone Scanner - Secure Power
 if "app_page" not in st.session_state:
     st.session_state.app_page = "📈 Main Scanner (zone_core.py)"
 
+# ---------- circular logo (inline SVG - koi external file nahi) ----------
+LOGO_SVG = (
+    "data:image/svg+xml;utf8,"
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>"
+    "<defs><radialGradient id='g' cx='50%' cy='40%'>"
+    "<stop offset='0%' stop-color='%232d333b'/>"
+    "<stop offset='100%' stop-color='%230d1117'/></radialGradient></defs>"
+    "<circle cx='32' cy='32' r='31' fill='url(%23g)' stroke='%23ff4b4b' stroke-width='2'/>"
+    "<circle cx='32' cy='32' r='22' fill='none' stroke='%23ff4b4b' stroke-width='5' opacity='.18'/>"
+    "<circle cx='32' cy='32' r='14' fill='none' stroke='%23ff4b4b' stroke-width='5' opacity='.38'/>"
+    "<circle cx='32' cy='32' r='6.5' fill='none' stroke='%23ff4b4b' stroke-width='4' opacity='.75'/>"
+    "<circle cx='32' cy='32' r='2.4' fill='%23ff4b4b'/>"
+    "<path d='M32 4v9M32 51v9M4 32h9M51 32h9' stroke='%23ff4b4b' stroke-width='2' opacity='.65'/>"
+    "<rect x='26' y='14' width='12' height='6' rx='2' fill='none' stroke='%237ee787' stroke-width='1.6' opacity='.85'/>"
+    "<rect x='26' y='44' width='12' height='6' rx='2' fill='none' stroke='%237ee787' stroke-width='1.6' opacity='.85'/>"
+    "</svg>"
+)
+
+st.markdown("""
+<style>
+/* settings ka ROUND CIRCLE button */
+div[data-testid="stPopover"] > button{
+  border-radius:50% !important;
+  width:46px !important; height:46px !important;
+  min-width:46px !important; min-height:46px !important;
+  padding:0 !important; margin:0 !important;
+  font-size:1.25rem !important; line-height:1 !important;
+  display:flex !important; align-items:center !important; justify-content:center !important;
+  box-shadow:0 2px 10px rgba(255,75,75,.28) !important;
+}
+.zs-logo{width:52px;height:52px;border-radius:50%;flex:0 0 52px;
+  box-shadow:0 0 0 2px rgba(255,75,75,.35), 0 4px 14px rgba(0,0,0,.45);}
+.zs-title{font-size:1.7rem;font-weight:750;line-height:1.15;margin:0;}
+.zs-sub{font-size:.74rem;color:#8b949e;margin-top:2px;}
+</style>
+""", unsafe_allow_html=True)
+
 # Top bar
 gear_col, title_col, secure_col = st.columns([0.06, 0.74, 0.20])
 with title_col:
-    if "Validated" in st.session_state.app_page:
-        st.title("✅ Validated Zones - Second Page")
-    else:
-        st.title("📈 NSE F&O Supply/Demand Zone Scanner")
+    _pg_title = ("✅ Validated Zones - Second Page"
+                 if "Validated" in st.session_state.app_page
+                 else "📈 NSE F&O Supply/Demand Zone Scanner")
+    st.markdown(
+        '<div style="display:flex;align-items:center;gap:13px;margin:-6px 0 0 0;">'
+        '<img class="zs-logo" src="' + LOGO_SVG + '" alt="Zone Scanner"/>'
+        '<div><div class="zs-title">' + _pg_title + '</div>'
+        '<div class="zs-sub">Entry = Proximal · SL = Distal + buffer · nearest-zone pehle</div>'
+        '</div></div>', unsafe_allow_html=True)
 with gear_col:
     st.write("")
     settings_pop = st.popover("⚙️", help="Settings + Page Navigation + Secure API Keys")
@@ -235,6 +277,33 @@ with secure_col:
     else:
         status_html += '<span style="background:#5552;border:1px solid #555;border-radius:6px;padding:3px 8px;margin:2px;font-size:11px;color:#888;">○ Gemini (optional)</span>'
     st.markdown(status_html, unsafe_allow_html=True)
+
+# ---------- 🧪 Diagnostics: 502 / OOM ki wajah samajhne ke liye ----------
+with st.expander("🧪 Diagnostics — memory & Render limits (502 aa raha ho to yahan dekho)", expanded=False):
+    try:
+        import resource as _res
+        _mb = _res.getrusage(_res.RUSAGE_SELF).ru_maxrss / 1024
+        _mem_row = f"**{_mb:.0f} MB**"
+    except Exception:
+        _mem_row = "n/a"
+    import data_fetch as _df
+    st.markdown(f"""
+| Cheez | Value |
+|---|---|
+| Abhi memory use | {_mem_row} (Render FREE limit = **512 MB**) |
+| Chunk size / keep-bars | **{getattr(_df,'CHUNK_SIZE','?')}** / **{getattr(_df,'KEEP_BARS','?')}** |
+| F&O universe | **{len(get_fno_symbols(try_live=False)[0])}** symbols (embedded safety-net ON) |
+""")
+    st.caption("**502 Bad Gateway = Render ne app maar diya** (lagbhag hamesha memory > 512 MB).")
+    st.markdown("""
+**Agar 502 aaye to Render → Environment me ye daalo:**
+```bash
+ZS_CHUNK=10          # downloads chhote
+ZS_KEEP_BARS=500     # har symbol ke kam bars
+ZS_WORKERS=1
+```
+Ya **Render Starter ($7/mo)** = 0.5 CPU + 2 GB → koi dikkat nahi.
+""")
 
 with settings_pop:
     st.subheader("🧭 Page Navigation")
@@ -282,6 +351,11 @@ with settings_pop:
             st.success(f"✅ Gemini configured: {mask_key(gkey or '')} (secure) - AI analysis enabled")
         else:
             st.info("○ Gemini not configured - Rule-based hypothesis chalega (fast, free)")
+
+    st.checkbox("📏 Full column names (Timeframe / Direction / Entry (Proximal) …)",
+                value=False, key="full_col_names",
+                help="ON = poore column names (compact 'TF/Dir/SL/LTP' ki jagah). "
+                     "OFF = chhote names, zada columns ek screen me.")
 
     st.markdown("---")
     st.subheader("⚙️ Scanner Settings (Common)")
@@ -1704,6 +1778,25 @@ _DROP_COLS = [
 _DESIRED_ORDER = ["Symbol", "Timeframe", "Direction", "Pattern", "Entry (Proximal)", "Stop Loss (Distal+Buffer)", "Target (RR set)", "Current Price", "Distance %", "📊 Ind", "Delivery %", "ΔDeliv pp", "Vol ×Yday", "OI Signal", "🎯 OI क्यों"]
 
 
+def _full_or_short(full):
+    """Column labels: full names (screenshot jaisa) ya compact."""
+    if full:
+        return {
+            "Timeframe": "Timeframe", "Direction": "Direction",
+            "Entry (Proximal)": "Entry (Proximal)",
+            "Stop Loss (Distal+Buffer)": "Stop Loss (Distal+Buffer)",
+            "Target (RR set)": "Target (RR set)",
+            "Current Price": "Current Price", "Distance %": "Distance %",
+        }
+    return {
+        "Timeframe": "TF", "Direction": "Dir",
+        "Entry (Proximal)": "Entry",
+        "Stop Loss (Distal+Buffer)": "SL",
+        "Target (RR set)": "Target",
+        "Current Price": "LTP", "Distance %": "Dist %",
+    }
+
+
 def _show_clean_table(display_df, symbol_title):
     # हर स्टॉक के अपने (अलग-अलग) Daily indicators - per-row compact column
     try:
@@ -1731,20 +1824,21 @@ def _show_clean_table(display_df, symbol_title):
         if c not in final_cols:
             final_cols.append(c)
     clean_df = clean_df[final_cols]
+    _L = _full_or_short(bool(st.session_state.get("full_col_names", False)))
     st.dataframe(
         clean_df,
         width="stretch",
         hide_index=True,
         column_config={
             "Symbol": st.column_config.LinkColumn(symbol_title, display_text=r"symbol=(?:[^%]+%3A)?([^&]+)"),
-            "Timeframe": st.column_config.TextColumn("TF", width="small"),
-            "Direction": st.column_config.TextColumn("Dir", width="small"),
+            "Timeframe": st.column_config.TextColumn(_L["Timeframe"], width="small"),
+            "Direction": st.column_config.TextColumn(_L["Direction"], width="small"),
             "Pattern": st.column_config.TextColumn("Pattern", width="small"),
-            "Entry (Proximal)": st.column_config.NumberColumn("Entry", format="%.2f"),
-            "Stop Loss (Distal+Buffer)": st.column_config.NumberColumn("SL", format="%.2f"),
-            "Target (RR set)": st.column_config.NumberColumn("Target", format="%.2f"),
-            "Current Price": st.column_config.NumberColumn("LTP", format="%.2f"),
-            "Distance %": st.column_config.NumberColumn("Dist %", format="%.2f%%"),
+            "Entry (Proximal)": st.column_config.NumberColumn(_L["Entry (Proximal)"], format="%.2f"),
+            "Stop Loss (Distal+Buffer)": st.column_config.NumberColumn(_L["Stop Loss (Distal+Buffer)"], format="%.2f"),
+            "Target (RR set)": st.column_config.NumberColumn(_L["Target (RR set)"], format="%.2f"),
+            "Current Price": st.column_config.NumberColumn(_L["Current Price"], format="%.2f"),
+            "Distance %": st.column_config.NumberColumn(_L["Distance %"], format="%.2f%%"),
             "📊 Ind": st.column_config.TextColumn("Ind", width="small",
                                                   help="Us stock ke apne Daily indicators: RSI • Supertrend (▲/▼) • EMA 20/50/200 (✓=Price ऊपर, ✗=नीचे) • Volume vs SMA20. Full detail नीचे 'Detailed Zone Analysis' में."),
             "Delivery %": st.column_config.NumberColumn("Deliv %", format="%.1f%%", help="Aaj ka delivery % (NSE bhavcopy)"),

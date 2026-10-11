@@ -195,3 +195,30 @@ python fno_universe.py --refresh
   the real NSE file formats; `python indicators_hypothesis.py` likewise.
 - The NSE holiday calendar baked into `candle_clock.py` is a best-effort
   list (2025-2026); update it for future years.
+
+
+---
+
+## 🆕 Recent updates (performance + UI polish)
+
+### 🐛 Fix: "502 Bad Gateway" (Render free OOM)
+`data_fetch.py` me chunk chhota, `float32` downcast, `KEEP_BARS` trim aur
+`gc.collect()` — memory ~700 MB se ghat kar **~200 MB**.
+Poora detail: **[`PERFORMANCE.md`](PERFORMANCE.md)**
+
+### 🐛 Fix: "All (0)" — universe load nahi hota tha
+`fno_universe.py` me **210 symbols embedded** safety-net — JSON file
+missing ho to bhi universe poora rahta hai.
+
+### ✨ UI
+- **Circular logo** + **round ⚙️ settings button** (clean header)
+- **🧪 Diagnostics** expander — live memory + Render limits
+- **📏 Full column names** toggle (Settings ⚙️) — `TF/Dir/SL/LTP` ki jagah
+  `Timeframe / Direction / Stop Loss (Distal+Buffer) / Current Price`
+
+### 🔒 Guarantee
+`python3 verify_zone_source.py` — 4/4 checks pass. Zones sirf
+`zone_core.py` / `zone_core_validation.py` se aate hain.
+
+### 🗺️ Aage kya
+**[`ROADMAP.md`](ROADMAP.md)** — Tier 1 (forward-test journal) se shuru karo.

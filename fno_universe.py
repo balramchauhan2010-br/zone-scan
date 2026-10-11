@@ -18,6 +18,41 @@ import requests
 
 FALLBACK_PATH = Path(__file__).parent / "fno_stocks_fallback.json"
 
+# ---- EMBEDDED 210-symbol snapshot (safety net) --------------------------
+# Deploy par agar JSON file missing / unreadable ho, to universe 0 ho jata hai
+# ("All (0)" + koi zone nahi). Ye embedded list wo kabhi hone nahi deti.
+_EMBEDDED_FNO = (
+    "360ONE", "ABB", "ABCAPITAL", "ADANIENSOL", "ADANIENT", "ADANIGREEN", "ADANIPORTS",
+    "ADANIPOWER", "ALKEM", "AMBER", "AMBUJACEM", "ANGELONE", "APLAPOLLO", "APOLLOHOSP",
+    "ASHOKLEY", "ASIANPAINT", "ASTRAL", "ATHERENERG", "AUBANK", "AUROPHARMA",
+    "AXISBANK", "BAJAJ-AUTO", "BAJAJFINSV", "BAJAJHLDNG", "BAJFINANCE", "BANDHANBNK",
+    "BANKBARODA", "BANKINDIA", "BDL", "BEL", "BHARATFORG", "BHARTIARTL", "BHEL",
+    "BIOCON", "BLUESTARCO", "BOSCHLTD", "BPCL", "BRITANNIA", "BSE", "CAMS", "CANBK",
+    "CDSL", "CGPOWER", "CHOLAFIN", "CIPLA", "COALINDIA", "COCHINSHIP", "COFORGE",
+    "COLPAL", "CONCOR", "CROMPTON", "CUMMINSIND", "DABUR", "DELHIVERY", "DIVISLAB",
+    "DIXON", "DLF", "DMART", "DRREDDY", "EICHERMOT", "ETERNAL", "FEDERALBNK",
+    "FORCEMOT", "FORTIS", "GAIL", "GLENMARK", "GMRAIRPORT", "GODFRYPHLP", "GODREJCP",
+    "GODREJPROP", "GRASIM", "GVT&D", "HAL", "HAVELLS", "HCLTECH", "HDFCAMC", "HDFCBANK",
+    "HDFCLIFE", "HEROMOTOCO", "HINDALCO", "HINDPETRO", "HINDUNILVR", "HINDZINC",
+    "HYUNDAI", "ICICIBANK", "ICICIGI", "ICICIPRULI", "IDEA", "IDFCFIRSTB", "IEX",
+    "INDHOTEL", "INDIANB", "INDIGO", "INDUSINDBK", "INDUSTOWER", "INFY", "INOXWIND",
+    "IOC", "IREDA", "IRFC", "ITC", "JINDALSTEL", "JIOFIN", "JSWENERGY", "JSWSTEEL",
+    "JUBLFOOD", "KALYANKJIL", "KAYNES", "KEI", "KFINTECH", "KOTAKBANK", "KPITTECH",
+    "LAURUSLABS", "LICHSGFIN", "LICI", "LODHA", "LT", "LTF", "LTM", "LUPIN", "M&M",
+    "MAHABANK", "MANAPPURAM", "MANKIND", "MARICO", "MARUTI", "MAXHEALTH", "MAZDOCK",
+    "MCX", "MFSL", "MOTHERSON", "MOTILALOFS", "MPHASIS", "MUTHOOTFIN", "NAM-INDIA",
+    "NATIONALUM", "NAUKRI", "NBCC", "NESTLEIND", "NHPC", "NMDC", "NTPC", "NYKAA",
+    "OBEROIRLTY", "OFSS", "OIL", "ONGC", "PAGEIND", "PATANJALI", "PAYTM", "PERSISTENT",
+    "PETRONET", "PFC", "PGEL", "PHOENIXLTD", "PIDILITIND", "PIIND", "PNB", "PNBHOUSING",
+    "POLICYBZR", "POLYCAB", "POWERGRID", "POWERINDIA", "PREMIERENE", "PRESTIGE",
+    "RADICO", "RBLBANK", "RECLTD", "RELIANCE", "RVNL", "SAGILITY", "SAIL", "SBICARD",
+    "SBILIFE", "SBIN", "SHREECEM", "SHRIRAMFIN", "SIEMENS", "SOLARINDS", "SONACOMS",
+    "SRF", "SUNPHARMA", "SUPREMEIND", "SUZLON", "SWIGGY", "TATACONSUM", "TATAELXSI",
+    "TATAPOWER", "TATASTEEL", "TCS", "TECHM", "TIINDIA", "TITAN", "TMPV", "TORNTPHARM",
+    "TRENT", "TVSMOTOR", "ULTRACEMCO", "UNIONBANK", "UNITDSPR", "UNOMINDA", "UPL",
+    "VBL", "VEDL", "VMM", "VOLTAS", "WAAREEENER", "WIPRO", "YESBANK", "ZYDUSLIFE"
+)
+
 _HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/120.0 Safari/537.36",
@@ -45,8 +80,18 @@ def fetch_live() -> List[str]:
 
 
 def load_fallback() -> List[str]:
-    with open(FALLBACK_PATH) as f:
-        return sorted(json.load(f))
+    """Embedded list pehle, phir JSON file.  Kabhi empty nahi lautaate."""
+    try:
+        embedded = sorted({str(x).strip().upper() for x in _EMBEDDED_FNO if str(x).strip()})
+        if embedded:
+            return embedded
+    except Exception:
+        pass
+    try:
+        with open(FALLBACK_PATH) as f:
+            return sorted(json.load(f))
+    except Exception:
+        return []
 
 
 def get_fno_symbols(try_live: bool = True) -> Tuple[List[str], str]:
@@ -54,10 +99,14 @@ def get_fno_symbols(try_live: bool = True) -> Tuple[List[str], str]:
     if try_live:
         try:
             symbols = fetch_live()
-            return symbols, "live (nseindia.com)"
+            if len(symbols) >= 50:
+                return symbols, "live (nseindia.com)"
         except Exception:
             pass
-    return load_fallback(), f"bundled fallback ({FALLBACK_PATH.name})"
+    fb = load_fallback()
+    if not fb:                       # aakhiri safety-net
+        fb = sorted({str(x).strip().upper() for x in _EMBEDDED_FNO if str(x).strip()})
+    return fb, f"bundled fallback ({len(fb)} symbols)"
 
 
 def to_yahoo_tickers(symbols: List[str]) -> List[str]:

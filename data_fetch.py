@@ -17,6 +17,8 @@ more aggressively than a normal home connection:
 None of this touches zone_core.py's rules/logic - purely a data-plumbing
 robustness/speed fix.
 """
+import gc
+import os
 import time
 import warnings
 from typing import Callable, Dict, List, Optional
@@ -32,7 +34,11 @@ except Exception:
 
 warnings.filterwarnings("ignore")
 
-CHUNK_SIZE = 40
+# ---- memory guards (Render free = 512 MB, 0.1 CPU) --------------------
+# Bade chunk + puri history + float64 = OOM = "502 Bad Gateway".
+# Sab env vars se tune ho sakte hain, bina code chhue.
+CHUNK_SIZE = int(os.environ.get("ZS_CHUNK", "15"))
+KEEP_BARS = int(os.environ.get("ZS_KEEP_BARS", "800"))
 REQUEST_TIMEOUT = 10       # seconds per attempt - fail fast, don't hang the UI
 MAX_ATTEMPTS = 2           # 1 retry only
 RETRY_BACKOFF = 0.7        # seconds
@@ -84,7 +90,19 @@ def download_many(tickers: List[str], interval: str, start: str, end: str = None
             sub = sub.dropna(subset=["open", "high", "low", "close"])
             if sub.empty:
                 continue
-            out[t] = sub[["open", "high", "low", "close", "volume"]]
+            sub = sub[["open", "high", "low", "close", "volume"]]
+            # float64 -> float32  (memory aadhi)
+            try:
+                sub = sub.astype("float32")
+            except Exception:
+                pass
+            # purani history trim (zone engine ko ~750 bars se zyada ki zarurat nahi)
+            if KEEP_BARS and len(sub) > KEEP_BARS:
+                sub = sub.iloc[-KEEP_BARS:]
+            out[t] = sub
+        # har chunk ke baad bada raw frame chhodo + memory release
+        del df
+        gc.collect()
     return out
 
 

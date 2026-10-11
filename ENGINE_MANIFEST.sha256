@@ -1,0 +1,5 @@
+# Engine file hashes — zone_core*.py UNTOUCHED rehni chahiye.
+# Regenerate: python3 verify_zone_source.py --seal
+
+3518c3b2e67cf252c623b7363ae672b884191d7383c2685a32ce2a50bb03d8ec  zone_core.py
+ea55e51a37292719999f1252f67fd2e0f3bbd984c26097d0f4a87eb48fd088cf  zone_core_validation.py
